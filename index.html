@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>敘獎 CSV 產製工具</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600&family=Noto+Serif+TC:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>敘獎 CSV 產製</h1>
+  <p>讀取敘獎公文，比對校內人員名冊，產出 WebHR 獎懲匯入用的 Big5 CSV。所有資料只留在這個瀏覽器分頁，不會上傳到任何地方。</p>
+</header>
+
+<!-- 1 -->
+<section class="step">
+  <h2><span class="n">1</span>人員資料</h2>
+  <p class="hint">人事系統的人員基本資料表，提供身分證號與職稱。名冊上沒有的人不會被敘獎。</p>
+  <div class="grid2">
+    <div>
+      <div class="drop" id="rosterDrop" tabindex="0" role="button">
+        <strong>人員基本資料表</strong>
+        <span>CPAB1207R　.xls / .xlsx　必要</span>
+        <input type="file">
+      </div>
+      <div class="loaded" id="rosterMsg" hidden></div>
+    </div>
+    <div>
+      <div class="drop" id="corpusDrop" tabindex="0" role="button">
+        <strong>歷年獎懲明細表</strong>
+        <span>CPAB1209R　.xls / .xlsx　選用</span>
+        <input type="file">
+      </div>
+      <div class="loaded" id="corpusMsg" hidden></div>
+    </div>
+  </div>
+
+  <div class="settings">
+    <label>機關代碼<input type="text" id="orgCode" value="397085000Y"></label>
+    <label><input type="checkbox" id="excludePrincipal" checked>排除校長（另由教育局核布獎令）</label>
+    <label><input type="checkbox" id="withBasis" checked>事由附「依據○○函辦理」</label>
+    <label>編碼
+      <select id="encoding">
+        <option value="big5">Big5</option>
+        <option value="utf8">UTF-8 (BOM)</option>
+      </select>
+    </label>
+  </div>
+</section>
+
+<!-- 2 -->
+<section class="step" id="step2" hidden>
+  <h2><span class="n">2</span>敘獎公文</h2>
+  <p class="hint">可一次選多份。只會讀取「擬辦」段落找名單，批核軌跡裡的簽核人不會被誤認成受獎人。</p>
+  <div class="drop" id="docDrop" tabindex="0" role="button">
+    <strong>公文 PDF</strong>
+    <span>可多選，或直接把檔案拖進來</span>
+    <input type="file" multiple>
+  </div>
+  <div class="loaded" id="docMsg" hidden></div>
+  <div class="hist" id="history" hidden></div>
+</section>
+
+<!-- 3 -->
+<section class="step" id="step3" hidden>
+  <h2><span class="n">3</span>核對</h2>
+  <p class="hint">確認無誤的按左側「核」蓋章，只有蓋章的資料會寫進 CSV。姓名、獎度、事由都可以直接改。</p>
+  <div id="docs"></div>
+</section>
+
+<!-- 4 -->
+<section class="step" id="step4" hidden>
+  <h2><span class="n">4</span>匯出</h2>
+  <div class="actions">
+    <button class="primary" id="exportBtn" disabled>匯出 Big5 CSV</button>
+    <button class="ghost" id="sealAll">全部核章 / 取消</button>
+    <button class="ghost" id="clearBtn">清空公文</button>
+    <span class="summary" id="summary">尚未核章任何資料</span>
+  </div>
+  <div class="warnbox" id="warn" hidden></div>
+</section>
+
+<div class="foot">
+  匯出後到 WebHR：<code>獎懲作業 › 一般獎懲 › 獎懲案件維護作業</code>，
+  建立令(稿)後進入<code>明細</code>，選定人員方式，再用<code>匯入 CSV</code>。<br>
+  同一人不可有兩筆獎懲類別、獎懲事由、核定日期完全相同的資料，匯入前請留意。
+</div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="core.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>

@@ -1,0 +1,876 @@
+/* ===========================================================
+   敘獎 CSV 產製工具 — 核心邏輯
+   純前端，無後端。所有資料留在瀏覽器記憶體。
+   =========================================================== */
+
+/* -----------------------------------------------------------
+   1. Big5 編碼器
+   瀏覽器原生只有 TextDecoder 支援 big5，沒有 TextEncoder。
+   解法：用 TextDecoder 反查，在執行時建出「字元 -> 位元組」對照表。
+   ----------------------------------------------------------- */
+const Big5 = (() => {
+  let table = null;
+
+  // WHATWG 規範：這幾個字要取「最後」一個 pointer，不是第一個
+  const PREFER_LAST = new Set(['\u2550', '\u255E', '\u2561', '\u256A', '\u5341', '\u5345']);
+
+  function build() {
+    if (table) return table;
+    const map = new Map();
+    const dec = new TextDecoder('big5');
+    const buf = new Uint8Array(2);
+    for (let lead = 0x81; lead <= 0xFE; lead++) {
+      for (let trail = 0x40; trail <= 0xFE; trail++) {
+        if (trail > 0x7E && trail < 0xA1) continue;
+        buf[0] = lead; buf[1] = trail;
+        const ch = dec.decode(buf);
+        if (ch.length !== 1 || ch === '\uFFFD') continue;
+        if (PREFER_LAST.has(ch)) { map.set(ch, [lead, trail]); continue; }
+        if (!map.has(ch)) map.set(ch, [lead, trail]);
+      }
+    }
+    table = map;
+    return table;
+  }
+
+  /** 把字串編成 Big5 位元組。無法對應的字元回報出來，不靜默丟棄。 */
+  function encode(str) {
+    const t = build();
+    const out = [];
+    const unmapped = new Set();
+    for (const ch of str) {
+      const code = ch.codePointAt(0);
+      if (code < 0x80) { out.push(code); continue; }
+      const pair = t.get(ch);
+      if (pair) { out.push(pair[0], pair[1]); }
+      else { unmapped.add(ch); out.push(0x3F); } // '?'
+    }
+    return { bytes: new Uint8Array(out), unmapped: [...unmapped] };
+  }
+
+  return { encode, build };
+})();
+
+
+/* -----------------------------------------------------------
+   2. 代碼常數
+   ----------------------------------------------------------- */
+const AWARD_CODES = {
+  '嘉獎一次': '4001',
+  '嘉獎二次': '4002',
+  '記功一次': '4010',
+};
+
+const CATEGORY_CODES = [
+  ['A01', '領導有方'], ['A02', '工作績優'], ['A03', '操守廉潔'],
+  ['A04', '全勤獎勵'], ['A05', '研究發展績優'], ['A06', '訓練進修績優'],
+  ['A07', '競技比賽績優'], ['A08', '特殊功績'], ['A09', '優良事蹟'],
+  ['A10', '服務績優'],
+];
+
+const LAW = {
+  edu: { code: 'CA', name: '公立高級中等以下學校教師成績考核辦法' },
+  civil: { code: 'BT', name: '高雄市政府及所屬各機關公務人員平時獎懲標準表' },
+};
+
+// 條 / 點 / 項 / 款 / 目。null 代表該欄不適用，輸出時填哨兵值。
+const CLAUSE = {
+  edu: {
+    '4001': { 條: 6, 點: null, 項: 2, 款: 3, 目: 10 },
+    '4002': { 條: 6, 點: null, 項: 2, 款: 3, 目: 10 },
+    '4010': { 條: 6, 點: null, 項: 2, 款: 2, 目: 9 },
+  },
+  civil: {
+    '4001': { 條: null, 點: 3, 項: null, 款: null, 目: 5 },
+    '4002': { 條: null, 點: 3, 項: null, 款: null, 目: 5 },
+    '4010': { 條: null, 點: 4, 項: null, 款: null, 目: 7 },
+  },
+};
+
+// 哨兵值：沿用你既有 CSV 的慣例
+const SENTINEL = { 條: 999, 點: 999, 項: 99, 款: 99, 目: 99 };
+
+
+/* -----------------------------------------------------------
+   3. 人員基本資料表解析 (CPAB1207R)
+   ----------------------------------------------------------- */
+function parseRoster(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+  // 找標題列：同時含「姓名」與「身分證號」
+  let hdrIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const r = rows[i].map(c => String(c).trim());
+    if (r.includes('姓名') && r.includes('身分證號')) { hdrIdx = i; break; }
+  }
+  if (hdrIdx < 0) throw new Error('找不到標題列。請確認上傳的是 CPAB1207R 人員基本資料表。');
+
+  const hdr = rows[hdrIdx].map(c => String(c).trim());
+  const col = name => hdr.indexOf(name);
+  const cName = col('姓名'), cId = col('身分證號'), cTitle = col('職稱');
+  const cUnit = col('單位'), cRank = col('現支官職等');
+
+  const people = [];
+  for (let i = hdrIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const name = String(r[cName] ?? '').trim();
+    const id = String(r[cId] ?? '').trim().toUpperCase();
+    if (!name || !/^[A-Z][0-9]{9}$/.test(id)) continue;
+
+    const title = String(r[cTitle] ?? '').trim();
+    const rank = String(r[cRank] ?? '').trim();
+    const unit = String(r[cUnit] ?? '').trim();
+
+    people.push({
+      name, id, title, unit,
+      ...classifyPerson(title, rank),
+    });
+  }
+  if (!people.length) throw new Error('沒有讀到任何人員資料，請確認檔案內容。');
+  return people;
+}
+
+/**
+ * 判斷人員類別。
+ * 教育人員：職稱含「教師」，或現支官職等是薪額制（教師薪級）。
+ * 其餘（護理師、幹事、書記等職員）一律歸公務人員。
+ */
+function classifyPerson(title, rank) {
+  const isEdu = /教師/.test(title) || /薪額|薪點/.test(rank);
+  const isSubstitute = /代理|代課|兼任/.test(title);
+  const isPrincipal = /校長/.test(title);
+  return {
+    kind: isEdu ? 'edu' : 'civil',
+    teachClause: isEdu ? '2' : '1',   // 教示條款：2 教育人員 / 1 公務人員
+    isSubstitute,
+    isPrincipal,
+  };
+}
+
+
+/* -----------------------------------------------------------
+   4. 歷史獎懲明細表解析 (CPAB1209R) — 事由語料庫，選用
+   ----------------------------------------------------------- */
+function parseCorpus(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  let hdrIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const r = rows[i].map(c => String(c).trim());
+    if (r.includes('獎懲事由')) { hdrIdx = i; break; }
+  }
+  if (hdrIdx < 0) return [];
+  const hdr = rows[hdrIdx].map(c => String(c).trim());
+  const cReason = hdr.indexOf('獎懲事由');
+  const cResult = hdr.indexOf('獎懲結果');
+
+  const out = [];
+  for (let i = hdrIdx + 1; i < rows.length; i++) {
+    const raw = String(rows[i][cReason] ?? '').trim();
+    if (!raw) continue;
+    // Excel 的軟換行會被存成 _x000d_
+    const main = raw.split(/_x000d_|\r|\n/)[0].trim();
+    if (main.length < 6) continue;
+    out.push({ text: main, result: String(rows[i][cResult] ?? '').trim() });
+  }
+  return out;
+}
+
+
+/* -----------------------------------------------------------
+   5. 公文文字擷取與欄位解析
+   ----------------------------------------------------------- */
+
+/** 從 pdf.js 的 textContent 還原成帶換行的純文字 */
+function itemsToText(items) {
+  let out = '', lastY = null;
+  for (const it of items) {
+    const y = it.transform ? Math.round(it.transform[5]) : null;
+    if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) out += '\n';
+    out += it.str;
+    lastY = y;
+  }
+  return out;
+}
+
+/** 抽公文表頭欄位 */
+function parseDocMeta(text) {
+  const flat = text.replace(/[ \t]+/g, '');
+
+  const mDate = flat.match(/發文日期[：:]\s*中華民國(\d{2,3})年(\d{1,2})月(\d{1,2})日/);
+  const mNo = flat.match(/發文字號[：:]\s*([^\s\n]{6,40}?號)/);
+
+  // 發文機關：找「XXX 函」那一行
+  let agency = '';
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  for (const l of lines.slice(0, 60)) {
+    const m = l.match(/^([\u4e00-\u9fa5]{4,20}?)\s*函$/);
+    if (m) { agency = m[1]; break; }
+  }
+  if (!agency) {
+    const m = flat.match(/([\u4e00-\u9fa5]{4,20}?)函[\s\S]{0,80}?地址[：:]/);
+    if (m) agency = m[1];
+  }
+
+  // 主旨：到「說明」或「正本」為止
+  let subject = '';
+  const mSub = text.match(/主旨[：:]([\s\S]{0,300}?)(?=說明[：:]|正本[：:]|$)/);
+  if (mSub) subject = mSub[1].replace(/\s+/g, '').replace(/[。．]+$/, '');
+
+  // 說明段：主旨講的是「這份公文要幹嘛」，說明才寫「同仁做了什麼」
+  let body = '';
+  const mBody = text.match(/說明[：:]([\s\S]{0,900}?)(?=正本[：:]|副本[：:]|$)/);
+  if (mBody) body = cleanBlock(mBody[1]);
+
+  return {
+    agency,
+    year: mDate ? mDate[1] : '',
+    month: mDate ? mDate[2] : '',
+    day: mDate ? mDate[3] : '',
+    docNo: mNo ? mNo[1] : '',
+    subject,
+    body,
+  };
+}
+
+/**
+ * 擷取「擬辦」區塊 — 只在這裡找敘獎名單。
+ * 這一步很關鍵：批核軌跡裡會出現校長、人事主任等簽核者，
+ * 他們不是受獎人，必須排除在解析範圍外。
+ */
+function extractProposal(text) {
+  const END = /(批核軌跡|批示\s|會辦\s|承辦\s高雄|欄位批核紀錄|貼紙備註資訊|意見[：:])/;
+
+  let start = -1, offset = 0;
+
+  // 格式一：有「擬辦：」或「承辦意見：」標籤
+  const mProp = text.match(/(擬辦|承辦意見)[：:]/);
+  if (mProp) {
+    start = mProp.index; offset = mProp[0].length;
+  } else {
+    // 格式二：電子公文「意見及流程 / 文號：xxxxx」之後直接接內容，沒有擬辦標籤
+    const mFlow = text.match(/意見及流程[\s\S]{0,40}?文號[：:]\s*\d+\s*/);
+    if (mFlow) { start = mFlow.index; offset = mFlow[0].length; }
+  }
+  if (start < 0) return '';
+
+  let block = text.slice(start + offset);
+  const e = block.search(END);
+  if (e >= 0) block = block.slice(0, e);
+
+  return cleanBlock(block).slice(0, 1200);
+}
+
+/** 清掉 PDF 裝訂線的點狀雜訊，這些點會把詞切開（例：承裝﹒﹒﹒辦人員） */
+function cleanBlock(s) {
+  return s
+    .split('\n')
+    // 整行只有裝訂線標記的就整行丟掉，否則「嘉獎\n裝\n一次」會被切成無法辨識的字串
+    .filter(l => !/^[\s裝訂線﹒·.]*$/.test(l))
+    .join('\n')
+    .replace(/[裝訂線]?[﹒·]{2,}/g, '')
+    .replace(/[﹒]/g, '')
+    .replace(/\s+/g, '');
+}
+
+
+/* -----------------------------------------------------------
+   6. 姓名比對
+   以人員名冊為錨點掃描擬辦文字，而不是硬猜姓名格式。
+   ----------------------------------------------------------- */
+function matchNames(block, roster) {
+  const hits = [];
+  const seen = new Set();
+
+  const push = (person, pos, written, confidence) => {
+    const key = person.id + '@' + pos;
+    if (seen.has(key)) return;
+    seen.add(key);
+    hits.push({ person, pos, written, confidence });
+  };
+
+  for (let i = 0; i < block.length; i++) {
+    for (const p of roster) {
+      const n = p.name;
+      // 完全相符
+      if (block.startsWith(n, i)) { push(p, i, n, 'exact'); continue; }
+      // 同長度、差一字（抓錯字：江雨薇/江宇薇、陳玟純/陳玟蒓）
+      if (n.length >= 3) {
+        const w = block.slice(i, i + n.length);
+        if (w.length === n.length) {
+          let diff = 0;
+          for (let k = 0; k < n.length; k++) if (w[k] !== n[k]) diff++;
+          if (diff === 1 && w[0] === n[0] && /^[\u4e00-\u9fa5]+$/.test(w)) {
+            push(p, i, w, 'typo');
+          }
+        }
+      }
+    }
+  }
+
+  // 只有名沒有姓：「怡慈老師」→ 林怡慈
+  const TITLE = /(老師|主任|組長|護理師|幹事|執秘|秘書)/;
+  for (const p of roster) {
+    if (p.name.length < 3) continue;
+    const given = p.name.slice(1);
+    let idx = -1;
+    while ((idx = block.indexOf(given, idx + 1)) >= 0) {
+      if (idx > 0 && block[idx - 1] === p.name[0]) continue; // 已被完整比對抓到
+      const after = block.slice(idx + given.length, idx + given.length + 3);
+      if (TITLE.test(after)) push(p, idx, given, 'partial');
+    }
+  }
+
+  // 同一人在同一區塊出現多次，只留最前面那筆
+  const best = new Map();
+  for (const h of hits) {
+    const cur = best.get(h.person.id);
+    if (!cur || h.pos < cur.pos) best.set(h.person.id, h);
+  }
+  return [...best.values()].sort((a, b) => a.pos - b.pos);
+}
+
+
+/* -----------------------------------------------------------
+   6d. 職稱沿革（取自批核軌跡）
+   人員基本資料表只有現職，查不到「113學年度當時的教導主任是誰」。
+   但公文後半的批核軌跡會寫「…國民小學教導主任 侯進昇(2025.09.23)」，
+   把多份公文的簽核紀錄彙整起來，就看得出職務什麼時候交接。
+   ----------------------------------------------------------- */
+
+const SIGNER_RE =
+  /(?:小學|中學|國中|國小|學校|幼兒園)([\u4e00-\u9fa5]{2,8}?)[ \u3000]+([\u4e00-\u9fa5]{2,4})[ \u3000]*[（(：:]\s*(\d{3,4})[./](\d{1,2})[./](\d{1,2})/g;
+
+function extractSigners(text) {
+  const out = [];
+  let m;
+  SIGNER_RE.lastIndex = 0;
+  while ((m = SIGNER_RE.exec(text)) !== null) {
+    const [, title, name, y, mo, d] = m;
+    // 西元年換算民國年，兩種寫法的公文都有
+    const roc = Number(y) > 1911 ? Number(y) - 1911 : Number(y);
+    out.push({ title, name, roc, month: Number(mo), day: Number(d) });
+  }
+  return out;
+}
+
+/** 把多份公文的簽核紀錄合成一份職稱沿革 */
+function mergeSigners(all) {
+  const map = new Map();
+  for (const s of all) {
+    const key = s.title;
+    if (!map.has(key)) map.set(key, new Map());
+    const byName = map.get(key);
+    const cur = byName.get(s.name);
+    const stamp = s.roc * 10000 + s.month * 100 + s.day;
+    if (!cur) byName.set(s.name, { name: s.name, first: stamp, last: stamp });
+    else { cur.first = Math.min(cur.first, stamp); cur.last = Math.max(cur.last, stamp); }
+  }
+  const out = new Map();
+  for (const [title, byName] of map) {
+    out.set(title, [...byName.values()].sort((a, b) => a.first - b.first));
+  }
+  return out;
+}
+
+const fmtRoc = (n) => `${Math.floor(n / 10000)}/${String(Math.floor(n / 100) % 100).padStart(2, '0')}`;
+
+
+/* -----------------------------------------------------------
+   6c. 純職稱比對
+   「教導主任，教學組長，訓導組長各嘉獎1次」連姓都沒有。
+   名冊上的職稱多半是唯一的，仍然查得到人 —— 但查到的是「現職」，
+   不保證是公文所指的「時任」，所以一律標為需確認、不預設核章。
+   ----------------------------------------------------------- */
+
+// 「敬會人事主任」是會辦程序不是受獎人，這些前置詞要擋掉
+const PROCEDURAL = /(敬會|會辦|文會|陳送|陳核|送請|知會|簽會|轉陳|呈)$/;
+
+function matchByTitle(block, roster, taken = new Set(), history = null, era = null) {
+  const hits = [];
+  const re = /([\u4e00-\u9fa5]{2})?(主任|組長|護理師|幹事|校長|執秘|秘書|書記|管理員)/g;
+  let m;
+
+  while ((m = re.exec(block)) !== null) {
+    const [full, qualifier, role] = m;
+    if (taken.has(m.index)) continue;
+    if (PROCEDURAL.test(block.slice(Math.max(0, m.index - 3), m.index))) continue;
+
+    const roleKeys = ROLE_ALIAS[role] || [role];
+    const hasRole = p => roleKeys.some(k => p.title.includes(k));
+    let cands = [], written = full;
+
+    if (qualifier) {
+      const keys = UNIT_ALIAS[qualifier] || [qualifier];
+
+      // 第一層：職稱本身就寫全了（教學組長、訓導組長）
+      cands = roster.filter(p => keys.some(k => p.title.includes(k + role)));
+      if (cands.length) written = qualifier + role;
+
+      // 第二層：職稱沒寫全，改看單位。
+      // 例：公文寫「教導主任」，名冊職稱是「教師兼教務主任」但單位是「教導處」，
+      //     用單位就能和總務主任區分開來。
+      if (!cands.length) {
+        cands = roster.filter(p =>
+          hasRole(p) && keys.some(k => p.title.includes(k) || p.unit.includes(k)));
+        if (cands.length) written = qualifier + role;
+      }
+    }
+
+    // 第三層：只剩職務別可比，會有一串候選人讓使用者挑
+    if (!cands.length) {
+      cands = roster.filter(hasRole);
+      written = full;
+    }
+
+    // 第四層：補上批核軌跡查到的歷任者。
+    // 名冊只有現職，職務交接過的話現職者不見得是公文所指的人。
+    const past = [];
+    if (history) {
+      const key = qualifier ? qualifier + role : full;
+      const rec = history.get(key) || history.get(full) || history.get(role);
+      for (const r of rec || []) {
+        const p = roster.find(x => x.name === r.name);
+        if (p && !cands.includes(p)) { cands.push(p); past.push({ p, ...r }); }
+        else if (p) past.push({ p, ...r });
+      }
+    }
+    if (!cands.length) continue;
+
+    // 公文講的是更早的年度，優先排在任較早的人
+    if (past.length > 1 && era && era.past) {
+      const order = new Map(past.map((x, i) => [x.p.id, i]));
+      cands.sort((a, b) => (order.has(a.id) ? order.get(a.id) : 99) -
+                           (order.has(b.id) ? order.get(b.id) : 99));
+    }
+
+    hits.push({
+      person: cands[0],
+      candidates: cands,
+      tenure: Object.fromEntries(past.map(x => [x.p.id, `${fmtRoc(x.first)}–${fmtRoc(x.last)} 時任`])),
+      pos: m.index,
+      written,
+      confidence: cands.length === 1 ? 'title' : 'ambiguous',
+    });
+  }
+  return hits;
+}
+
+/**
+ * 判斷公文講的是不是更早的年度。
+ * 「113學年度推動喜閱網」但公文發於 114 年 —— 敘的是去年的事，
+ * 這時現職者不一定是當時的人。
+ */
+function detectEra(subject, docYear) {
+  const m = (subject || '').match(/(\d{2,3})\s*學?年度/);
+  if (!m || !docYear) return null;
+  const y = Number(m[1]);
+  return { year: y, past: y < Number(docYear) };
+}
+
+/** 完整比對跑完後，依序用姓+職稱、純職稱補沒抓到的人 */
+function matchAll(block, roster, history = null, era = null) {
+  const found = matchNames(block, roster);
+  const cover = (list) => {
+    const s = new Set();
+    for (const h of list) for (let i = 0; i < h.written.length; i++) s.add(h.pos + i);
+    return s;
+  };
+  const has = (list, h) => list.some(d => d.person.id === h.person.id);
+
+  const byRole = matchByRole(block, roster, cover(found)).filter(h => !has(found, h));
+  const stage2 = [...found, ...byRole];
+
+  // 職稱旁邊如果已經寫了姓名，那個職稱是在描述那個人，不是另一個受獎人。
+  // 例：「時任資訊執秘為:吳孟謙老師」—— 資訊執秘講的就是吳孟謙，
+  // 不該再把現任的資訊執秘也算進來。
+  const named = (h) => stage2.some(d => {
+    const gapAfter = d.pos - (h.pos + h.written.length);
+    const gapBefore = h.pos - (d.pos + d.written.length);
+    return (gapAfter >= 0 && gapAfter <= 12) || (gapBefore >= 0 && gapBefore <= 4);
+  });
+
+  const byTitle = matchByTitle(block, roster, cover(stage2), history, era)
+    .filter(h => !has(stage2, h) && !named(h));
+
+  return [...stage2, ...byTitle].sort((a, b) => a.pos - b.pos);
+}
+
+
+/* -----------------------------------------------------------
+   6b. 姓 + 職稱 推定
+   「教務林主任」「輔導謝組長」這種只有姓沒有名的寫法，
+   靠「單位 + 姓 + 職稱」三個條件回名冊反查。
+   ----------------------------------------------------------- */
+
+// 學務處和訓導處是同一個單位的新舊稱呼，要互通
+const UNIT_ALIAS = {
+  教務: ['教務'], 學務: ['學務', '訓導'], 訓導: ['訓導', '學務'],
+  輔導: ['輔導'], 總務: ['總務'], 教導: ['教導'],
+  人事: ['人事'], 主計: ['主計', '會計'], 會計: ['會計', '主計'],
+  圖書: ['圖書'], 幼兒園: ['幼兒園', '幼稚園'],
+};
+
+const ROLE_ALIAS = {
+  主任: ['主任'], 組長: ['組長'], 老師: ['教師'], 教師: ['教師'],
+  護理師: ['護理師', '護士'], 幹事: ['幹事'], 校長: ['校長'],
+  執秘: ['執秘', '執行秘書'], 秘書: ['秘書'], 書記: ['書記'], 管理員: ['管理員'],
+};
+
+const ROLE_RE = /(主任|組長|老師|教師|護理師|幹事|校長|執秘|秘書|書記|管理員)/;
+const UNIT_RE = /(教務|學務|訓導|輔導|總務|教導|人事|主計|會計|圖書|幼兒園)/;
+
+/**
+ * 掃描「(單位)姓職稱」樣式。
+ * 姓必須真的是名冊上某人的姓，否則不成立 —— 這一條同時擋掉了
+ * 「訓導組長」被誤讀成姓「導」的情況。
+ */
+function matchByRole(block, roster, taken = new Set()) {
+  const hits = [];
+  // UNIT_RE / ROLE_RE 本身已經帶括號，外層要用非捕獲群組，
+  // 否則群組編號會位移，抓到的「姓」其實是單位名。
+  const re = new RegExp(`(?:${UNIT_RE.source})?([\\u4e00-\\u9fa5])${ROLE_RE.source}`, 'g');
+  let m;
+
+  while ((m = re.exec(block)) !== null) {
+    const [, unit, surname, role] = m;
+    const surnamePos = m.index + (unit ? unit.length : 0);
+    if (taken.has(surnamePos)) continue;
+
+    const roleKeys = ROLE_ALIAS[role] || [role];
+    const unitKeys = unit ? (UNIT_ALIAS[unit] || [unit]) : null;
+
+    let cands = roster.filter(p => {
+      if (p.name[0] !== surname) return false;
+      if (!roleKeys.some(k => p.title.includes(k))) return false;
+      if (unitKeys && !unitKeys.some(k => p.title.includes(k) || p.unit.includes(k))) return false;
+      return true;
+    });
+
+    // 加了單位反而找不到人，就放寬成只看姓和職稱
+    if (!cands.length && unitKeys) {
+      cands = roster.filter(p =>
+        p.name[0] === surname && roleKeys.some(k => p.title.includes(k)));
+    }
+    if (!cands.length) continue;
+
+    hits.push({
+      person: cands[0],
+      candidates: cands,
+      pos: surnamePos,
+      written: (unit || '') + surname + role,
+      confidence: cands.length === 1 ? 'role' : 'ambiguous',
+    });
+  }
+  return hits;
+}
+
+/* -----------------------------------------------------------
+   7. 獎度解析
+   ----------------------------------------------------------- */
+const CN_NUM = {
+  '一': 1, '乙': 1, '二': 2, '兩': 2, '三': 3,
+  '１': 1, '２': 2, '1': 1, '2': 2, '3': 3,
+};
+
+function findAwards(block) {
+  const out = [];
+  // 「嘉獎2次」「嘉一次」（漏字）「嘉獎1支」「記功乙次」都要抓得到
+  const re = /(嘉獎?|記功|記大功)[裝訂線]?\s*([一乙二兩三１２1-3])\s*[次支個]/g;
+  let m;
+  while ((m = re.exec(block)) !== null) {
+    const kind = m[1].startsWith('嘉') ? '嘉獎' : (m[1] === '記功' ? '記功' : '記大功');
+    const n = CN_NUM[m[2]] ?? 1;
+    let code = null;
+    if (kind === '嘉獎') code = n === 2 ? '4002' : '4001';
+    else if (kind === '記功' && n === 1) code = '4010';
+
+    // 「各嘉獎1支」「均記功1次」— 這個獎度是整份名單共用的，不屬於某一個人
+    const lead = block.slice(Math.max(0, m.index - 8), m.index);
+    const shared = /各|均|每人|分別|同敘/.test(lead);
+
+    // 「嘉獎2次1人：蕭宗仁主任」— 獎度寫在前面當標題，後面才接名單。
+    // 分隔號限定冒號和破折號，不能收「、」「，」，
+    // 否則「…敘嘉獎2次、林怡慈老師…」會被誤判成標題，把下一個人吃掉。
+    const afterPos = m.index + m[0].length;
+    const mh = block.slice(afterPos, afterPos + 10).match(/^\s*(?:\d+\s*人)?\s*[：:\-－—]\s*/);
+
+    out.push({
+      pos: m.index,
+      code,
+      label: `${kind}${n === 2 ? '二' : n === 3 ? '三' : '一'}次`,
+      raw: m[0],
+      shared,
+      heading: !!mh,
+      headingEnd: mh ? afterPos + mh[0].length : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * 後備：擬辦沒寫獎度時，從來文本文找。
+ * 例：「茲同意每人敘嘉獎1次」— 獎度在函裡，擬辦只寫誰獲獎。
+ */
+function findFallbackAward(text) {
+  const m = text.match(/(?:敘|核予|同意|各)[^。\n]{0,24}?(嘉獎?|記功)\s*([一二三１２1-3])\s*次/);
+  if (!m) return null;
+  const kind = m[1].startsWith('嘉') ? '嘉獎' : '記功';
+  const n = CN_NUM[m[2]] ?? 1;
+  const code = kind === '嘉獎' ? (n === 2 ? '4002' : '4001') : (n === 1 ? '4010' : null);
+  return { pos: -1, code, label: `${kind}${n === 2 ? '二' : '一'}次`, raw: m[0], fallback: true };
+}
+
+/**
+ * 把姓名和獎度配對。
+ *
+ * 四階段認領：
+ *   1. 標題式獎度
+ *   2. 共用獎度（各／均）
+ *   3. 一般敘述依版面方向認領
+ *   4. 尚未配到的再從反方向補找
+ *
+ * 單純取最近距離會出錯：名單連寫時，後一個人的姓名離「前一個人的獎度」
+ * 反而比離自己的獎度更近。
+ *
+ * 一般公文多是「姓名…獎度」，但表格式擬辦常是「獎度／職稱／姓名」。
+ * 先比較整段中獎度落在姓名前後的命中數，再決定一般認領方向，
+ * 可避免學生健檢表格把郭喜淑的嘉獎二次錯配成下一列的嘉獎一次。
+ */
+function segmentAt(block, pos) {
+  // 句段邊界：句號、分號、換行，以及「1.」「一、」這種條列編號
+  const re = /[。；\n]|[0-9]\s*[.、]|[一二三四五六七八九十]\s*、/g;
+  let start = 0, end = block.length, m;
+  while ((m = re.exec(block)) !== null) {
+    if (m.index < pos) start = m.index + m[0].length;
+    else { end = m.index; break; }
+  }
+  return [start, end];
+}
+
+function pairNameAward(block, hits, awards, opts = {}) {
+  const FWD = opts.forward ?? 22;
+  const BACK = opts.backward ?? 25;
+
+  const claimed = new Set();
+  const result = hits.map(h => ({ ...h, award: null }));
+
+  // 第一階段：標題式獎度「嘉獎2次1人：甲主任、嘉獎1次3人：乙老師、丙主任」
+  // 一個標題管到下一個獎度出現為止，中間列的人全部適用。
+  awards.forEach((a, i) => {
+    if (!a.heading) return;
+    const next = awards.find(b => b.pos > a.pos);
+    const end = next ? next.pos : segmentAt(block, a.pos)[1];
+    const inSpan = result.filter(r => !r.award && r.pos >= a.headingEnd && r.pos < end);
+    if (!inSpan.length) return;
+    for (const r of inSpan) r.award = a;
+    claimed.add(i);
+  });
+
+  // 第二階段：共用獎度「…各嘉獎1支」不歸某一個人，而是同一句裡列出的每個人都有。
+  // 範圍限縮在同一個句段，否則會外溢到後面不相干的名單。
+  for (const a of awards) {
+    if (!a.shared) continue;
+    const [s0, s1] = segmentAt(block, a.pos);
+    // 同一句前面若已有另一個獎度，共用範圍從那個獎度之後才開始。
+    // 例：「蘇宇祥嘉獎2次，教導主任、總務主任各嘉獎1次」，
+    // 後面的「各嘉獎1次」不能回頭覆蓋蘇宇祥。
+    const previous = awards
+      .filter(other => other !== a && other.pos >= s0 && other.pos < a.pos)
+      .sort((x, y) => y.pos - x.pos)[0];
+    const scopeStart = previous ? previous.pos + previous.raw.length : s0;
+    const inSeg = result.filter(r => r.pos >= scopeStart && r.pos < s1);
+    for (const r of inSeg) if (!r.award) r.award = a;
+  }
+
+  const ordinary = awards
+    .map((award, index) => ({ award, index }))
+    .filter(({ award }) => !award.heading && !award.shared);
+
+  const hasNear = (r, direction) => ordinary.some(({ award }) => {
+    const d = direction === 'forward' ? award.pos - r.pos : r.pos - award.pos;
+    return d >= 0 && d <= (direction === 'forward' ? FWD : BACK);
+  });
+  const forwardHits = result.filter(r => !r.award && hasNear(r, 'forward')).length;
+  const backwardHits = result.filter(r => !r.award && hasNear(r, 'backward')).length;
+  const firstDirection = backwardHits > forwardHits ? 'backward' : 'forward';
+
+  const claimNearest = (direction) => {
+    const limit = direction === 'forward' ? FWD : BACK;
+    for (const r of result) {
+      if (r.award) continue;
+      let best = null, bestD = Infinity;
+      for (const { award, index } of ordinary) {
+        if (claimed.has(index)) continue;
+        const d = direction === 'forward' ? award.pos - r.pos : r.pos - award.pos;
+        if (d < 0 || d > limit) continue;
+        if (d < bestD) { bestD = d; best = index; }
+      }
+      if (best !== null) { claimed.add(best); r.award = awards[best]; }
+    }
+  };
+
+  // 第三、四階段：依整段版面方向認領，再從反方向補找。
+  claimNearest(firstDirection);
+  claimNearest(firstDirection === 'forward' ? 'backward' : 'forward');
+
+  return result;
+}
+
+
+/**
+ * 評估整份公文的解析可信度。
+ * 姓名數和獎度數對不起來，通常表示 PDF 的表格排版在抽文字時被打亂了，
+ * 這種情況配對結果不可信，要整份標記人工核對。
+ */
+function assessDoc(block, hits, awards) {
+  if (!block) return { level: 'fail', note: '找不到擬辦區塊，無法解析名單' };
+  if (!hits.length) {
+    return /主任|組長|導師|護理師|校長/.test(block)
+      ? { level: 'fail', note: '擬辦只寫職稱沒有姓名，需自行指定人員' }
+      : { level: 'fail', note: '擬辦區塊中找不到名冊上的人員' };
+  }
+  const shared = awards.some(a => a.shared);
+  if (awards.length && !shared && hits.length !== awards.length) {
+    return { level: 'warn', note: `找到 ${hits.length} 位人員但 ${awards.length} 個獎度，配對可能錯位，請逐筆核對` };
+  }
+  if (!awards.length) return { level: 'warn', note: '擬辦沒寫獎度，已改用來文本文的獎度' };
+
+  const byTitle = hits.filter(h => h.confidence === 'title' || h.confidence === 'ambiguous').length;
+  if (byTitle) {
+    return { level: 'warn', note:
+      `有 ${byTitle} 位公文只寫職稱，已用現職職稱對應。公文若涉及前一學年度，請確認是否已有人事異動。` };
+  }
+  const byRole = hits.filter(h => h.confidence === 'role').length;
+  if (byRole) {
+    return { level: 'warn', note: `有 ${byRole} 位是依「姓＋職稱」推定的，請確認是不是本人` };
+  }
+  return { level: 'ok', note: '' };
+}
+
+
+/* -----------------------------------------------------------
+   8. 獎懲事由草擬
+   ----------------------------------------------------------- */
+const SUBJECT_NOISE = [
+  /^有關/, /^為/, /^關於/,
+  /貴校|貴屬|本市各級學校|本市公私立|本局/g,
+];
+
+function draftReason(meta, block, opts = {}) {
+  const { withBasis = true, limit = 100 } = opts;
+
+  // 優先取主旨裡「」引號內的計畫名稱 — 這通常就是事由核心
+  let core = '';
+  const quoted = (meta.subject || '').match(/[「『]([^」』]{6,60})[」』]/);
+  if (quoted) {
+    core = quoted[1];
+  } else {
+    core = (meta.subject || '')
+      .replace(/^有關|^為|^關於/, '')
+      .replace(/貴校|貴屬|本市公私立高級中等以下學校|本局所屬/g, '')
+      .replace(/[，,]?\s*(詳如說明|請查照|請依說明[^，。]*|請依敘獎清冊[^，。]*|以資鼓勵)[^]*$/g, '')
+      .replace(/(有功人員)?敘獎案$|獎勵案$|敘獎事宜$|案$/g, '')
+      .replace(/[，。、]+$/, '');
+  }
+  core = core
+    .replace(/^[「『]|[」』]$/g, '')
+    .replace(/統計結果$|相關事宜$|事宜$/g, '')
+    .replace(/[及與暨和，、．。]+$/g, '')   // 截掉後留下的懸空連接詞
+    .trim();
+
+  // 主旨清完只剩「…資訊教育人員」這種人物名詞，接上動詞會不通順。
+  // 改從說明段找真正描述做了什麼的句子。
+  let verbFromBody = '';
+  if (!quoted && /(人員|教師|學校|人|者)$/.test(core)) {
+    const m = (meta.body || '').match(
+      /(協助|辦理|推動|參與|承辦|協辦)[^，。、）\n]{4,40}?(業務|工作|計畫|活動|方案|任務|事項)/);
+    if (m) { core = m[0]; verbFromBody = m[1]; }
+  }
+
+  // 動詞：擬辦裡自稱承辦就用「辦理」，否則用「協助辦理」
+  const verb = verbFromBody ? '' : (/承辦人員|業務承辦|主要業務承辦/.test(block) ? '辦理' : '協助辦理');
+
+  let main = core ? `${verb}${core}，辛勞得力` : '辦理相關業務，辛勞得力';
+
+  let basis = '';
+  if (withBasis && meta.agency && meta.year && meta.docNo) {
+    basis = `依據${meta.agency}${meta.year}年${meta.month}月${meta.day}日${meta.docNo}函辦理`;
+  }
+
+  // 100 字上限：優先保住依據子句，前段不夠就截
+  let full = basis ? `${main}\n${basis}` : main;
+  if (full.length > limit) {
+    const room = limit - (basis ? basis.length + 1 : 0) - 5;
+    if (room > 12) {
+      main = `${verb}${core.slice(0, Math.max(6, room - verb.length - 5))}，辛勞得力`;
+      full = basis ? `${main}\n${basis}` : main;
+    }
+    if (full.length > limit) full = full.slice(0, limit);
+  }
+  return full;
+}
+
+
+/* -----------------------------------------------------------
+   9. 獎懲類別判斷
+   ----------------------------------------------------------- */
+function guessCategory(text) {
+  const t = text || '';
+  if (/比賽|競賽|錦標|球賽|闖關|競技/.test(t)) return 'A07';
+  if (/研習|培訓|訓練|進修|工作坊/.test(t)) return 'A06';
+  if (/研究|研發|課程發展|教材/.test(t)) return 'A05';
+  if (/防疫|疫苗|健檢|健康檢查|衛生/.test(t)) return 'A02';
+  return 'A02'; // 預設：工作績優
+}
+
+
+/* -----------------------------------------------------------
+   10. 組出一列 CSV 資料
+   ----------------------------------------------------------- */
+function buildRow(person, awardCode, reason, category, orgCode, opts = {}) {
+  const kind = person.kind;
+  const law = LAW[kind];
+  const cl = (CLAUSE[kind] && CLAUSE[kind][awardCode]) || { 條: null, 點: null, 項: null, 款: null, 目: null };
+  const v = (key) => (cl[key] === null || cl[key] === undefined ? SENTINEL[key] : cl[key]);
+
+  return {
+    身分證號: person.id,
+    姓名: person.name,
+    機關代碼: orgCode,
+    獎懲事由: reason,
+    獎懲事由長: '',
+    獎懲結果: awardCode || '',
+    其他事項: '',
+    獎懲類別: category,
+    適用法規: law.code,
+    適用法規名稱: law.name,
+    條: v('條'), 點: v('點'), 項: v('項'), 款: v('款'), 目: v('目'),
+    教示條款: person.teachClause,
+  };
+}
+
+const CSV_HEADER = [
+  '身分證號', '姓名', '機關代碼', '獎懲事由(更新資料庫)',
+  '獎懲事由(長)(非必填，建議不使用)', '獎懲結果', '其他事項', '獎懲類別',
+  '適用法規', '適用法規名稱', '條', '點', '項', '款', '目', '教示條款',
+];
+
+function rowsToCsv(rows) {
+  const esc = (s) => {
+    const t = String(s ?? '');
+    // 事由裡的換行會讓 WebHR 匯入出錯，一律轉成空白
+    const clean = t.replace(/[\r\n]+/g, ' ').replace(/'/g, '');
+    return /[",]/.test(clean) ? `"${clean.replace(/"/g, '""')}"` : clean;
+  };
+  const lines = [CSV_HEADER.join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.身分證號, r.姓名, r.機關代碼, r.獎懲事由, r.獎懲事由長,
+      r.獎懲結果, r.其他事項, r.獎懲類別, r.適用法規, r.適用法規名稱,
+      r.條, r.點, r.項, r.款, r.目, r.教示條款,
+    ].map(esc).join(','));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
