@@ -270,6 +270,9 @@ function autoSeal(p) {
   if (p.confidence === 'exact') return true;
   if (p.confidence === 'typo' && p.unique !== false) return true;
   if (p.confidence === 'self' && p.selfCertain) return true;
+  // 職稱完整命中且唯一，等同寫出姓名。
+  // 只有批核軌跡顯示這個職務交接過，才需要人工確認是哪一任。
+  if (p.confidence === 'titleExact' && !p.titleHandover) return true;
   return false;
 }
 
@@ -378,6 +381,9 @@ function analyzeDoc(doc) {
       person: p.person,
       written: p.written,
       confidence: p.confidence,
+      titleTier: p.titleTier || '',
+      titleHandover: !!p.titleHandover,
+      eraPast: !!(era && era.past),
       unique: p.unique !== false,
       selfCertain: !!p.selfCertain,
       selfTitle: p.selfTitle || '',
@@ -417,6 +423,7 @@ function reanalyzeDocs(opts = {}) {
       const prior = old.get(row.occurrenceKey);
       if (!prior) continue;
       row.include = prior.include;
+      if (prior.picked) { row.person = prior.person; row.picked = true; }
       row.awardCode = prior.awardCode;
       row.category = prior.category;
       if (preserveReason) row.reason = prior.reason;
@@ -529,6 +536,9 @@ const CONF_LABEL = {
   partial:   ['check', '需確認'],
   role:      ['typo',  '職稱推定'],
   title:     ['typo',  '職稱對應'],
+  titleExact:['ok',    '職稱相符'],
+  titlePast: ['typo',  '職稱相符'],
+  history:   ['check', '時任推定'],
   ambiguous: ['check', '多人符合'],
 };
 
@@ -578,6 +588,8 @@ function renderRow(row) {
   let key = row.confidence;
   if (key === 'typo' && row.unique !== false) key = 'typoSure';
   if (key === 'self' && !row.selfCertain) key = 'selfGuess';
+  if (key === 'titleExact' && row.titleHandover) key = 'titlePast';
+  if (key === 'title' && row.titleTier === 'history') key = 'history';
   const [cls, label] = CONF_LABEL[key] || CONF_LABEL.exact;
   const line1 = el('div', { class: 'line1' },
     el('span', { class: 'badge ' + cls, text: label }),
@@ -590,9 +602,26 @@ function renderRow(row) {
     line1.append(el('span', { class: 'written', text: `公文寫「${row.written}」` }));
   }
   if (row.candidates && row.candidates.length > 1) {
-    const names = row.candidates.map(c =>
-      c.name + (row.tenure && row.tenure[c.id] ? `（${row.tenure[c.id]}）` : ''));
-    line1.append(el('span', { class: 'written', text: `符合的有 ${names.join('、')}，請確認` }));
+    // 既然已經算出候選人，就讓使用者直接點，不必再去下拉裡找
+    const pick = el('span', { class: 'picks' },
+      el('span', { class: 'picks-label', text: '請選一位' }));
+    for (const c of row.candidates) {
+      const tenure = row.tenure && row.tenure[c.id] ? row.tenure[c.id] : '現職';
+      pick.append(el('button', {
+        type: 'button',
+        class: 'pick' + (c.id === row.person.id ? ' on' : ''),
+        'aria-pressed': String(c.id === row.person.id),
+        onclick: () => {
+          row.person = c;
+          row.picked = true;
+          render();
+        },
+      },
+        el('span', { class: 'pick-name', text: c.name }),
+        el('span', { class: 'pick-sub', text: `${c.title}　${tenure}` }),
+      ));
+    }
+    line1.append(pick);
   }
   if (row.manual) {
     line1.append(el('button', {
@@ -613,8 +642,16 @@ function renderRow(row) {
   if (row.confidence === 'typo' && row.unique !== false) {
     line1.append(el('span', { class: 'written', text: `公文誤寫「${row.written}」，已更正` }));
   }
+  if (row.confidence === 'titleExact') {
+    line1.append(el('span', { class: 'written',
+      text: row.titleHandover ? '名冊職稱完全相符，但這個職務交接過，請確認是哪一任'
+                              : '名冊職稱完全相符' }));
+  }
   if (row.confidence === 'title') {
-    line1.append(el('span', { class: 'written', text: '依現職職稱對應' }));
+    line1.append(el('span', { class: 'written',
+      text: row.titleTier === 'history' ? '現職職稱對不上，是依批核軌跡的沿革推定'
+          : row.titleTier === 'unit' ? '職稱沒完全對上，是靠單位分辨的'
+          : '依現職職稱對應' }));
   }
   if (row.person.isSubstitute) {
     line1.append(el('span', { class: 'written', text: '代理教師，請確認適用法規' }));

@@ -609,8 +609,11 @@ function matchSelfReference(block, roster, submitter) {
 /* -----------------------------------------------------------
    6c. 純職稱比對
    「教導主任，教學組長，訓導組長各嘉獎1次」連姓都沒有。
-   名冊上的職稱多半是唯一的，仍然查得到人 —— 但查到的是「現職」，
-   不保證是公文所指的「時任」，所以一律標為需確認、不預設核章。
+   名冊上的職稱多半是唯一的，仍然查得到人。
+
+   名冊就是敘獎範圍：不在名冊上的人不列入，他曾任什麼職務也不構成問題。
+   所以職稱完整命中且名冊上唯一時直接核章；只有名冊上兩人以上符合，
+   或現職職稱對不上、要靠沿革才查得到時，才需要人工挑。
    ----------------------------------------------------------- */
 
 // 「敬會人事主任」是會辦程序不是受獎人，這些前置詞要擋掉
@@ -629,13 +632,19 @@ function matchByTitle(block, roster, taken = new Set(), history = null, era = nu
     const roleKeys = ROLE_ALIAS[role] || [role];
     const hasRole = p => roleKeys.some(k => p.title.includes(k));
     let cands = [], written = full;
+    // 記錄是靠哪一層對上的，確認的必要性差很多：
+    //   full —— 名冊職稱完整包含公文寫的職稱，跟寫姓名一樣確定
+    //   unit —— 職稱對不上，靠單位才分辨出來
+    //   role —— 只剩職務別可比
+    //   history —— 現職對不上，只有批核軌跡查得到
+    let tier = 'role';
 
     if (qualifier) {
       const keys = UNIT_ALIAS[qualifier] || [qualifier];
 
       // 第一層：職稱本身就寫全了（教學組長、訓導組長）
       cands = roster.filter(p => keys.some(k => p.title.includes(k + role)));
-      if (cands.length) written = qualifier + role;
+      if (cands.length) { written = qualifier + role; tier = 'full'; }
 
       // 第二層：職稱沒寫全，改看單位。
       // 例：公文寫「教導主任」，名冊職稱是「教師兼教務主任」但單位是「教導處」，
@@ -643,7 +652,7 @@ function matchByTitle(block, roster, taken = new Set(), history = null, era = nu
       if (!cands.length) {
         cands = roster.filter(p =>
           hasRole(p) && keys.some(k => p.title.includes(k) || p.unit.includes(k)));
-        if (cands.length) written = qualifier + role;
+        if (cands.length) { written = qualifier + role; tier = 'unit'; }
       }
     }
 
@@ -674,13 +683,26 @@ function matchByTitle(block, roster, taken = new Set(), history = null, era = nu
                            (order.has(b.id) ? order.get(b.id) : 99));
     }
 
+    // 選中的人現職職稱對不上，表示是靠沿革查到的 —— 這種一定要人工確認
+    const chosen = cands[0];
+    const chosenTier = hasRole(chosen) ? tier : 'history';
+
+    // 這個職務在批核軌跡上換過人嗎？
+    // 敘獎公文幾乎都是在敘去年的事，光看年度早晚沒有鑑別力；
+    // 真正該警戒的是「有證據顯示這個職務交接過」。
+    const handover = past.length > 1;
+
     hits.push({
-      person: cands[0],
+      person: chosen,
       candidates: cands,
+      titleTier: chosenTier,
+      titleHandover: handover,
       tenure: Object.fromEntries(past.map(x => [x.p.id, `${fmtRoc(x.first)}–${fmtRoc(x.last)} 時任`])),
       pos: m.index,
       written,
-      confidence: cands.length === 1 ? 'title' : 'ambiguous',
+      // 職稱完整命中且只有一個人，確定性等同寫出姓名
+      confidence: cands.length > 1 ? 'ambiguous'
+        : (chosenTier === 'full' ? 'titleExact' : 'title'),
     });
   }
   return hits;
@@ -1047,10 +1069,16 @@ function assessDoc(block, hits, awards, hasFallbackAward = false, paired = null)
   if (awards.length && !shared && hits.length !== awards.length) {
     return { level: 'warn', note: `找到 ${hits.length} 位人員但 ${awards.length} 個獎度，配對可能錯位，請逐筆核對` };
   }
-  const byTitle = hits.filter(h => h.confidence === 'title' || h.confidence === 'ambiguous').length;
-  if (byTitle) {
+  // 真的需要你做決定的，是「名冊上有兩個以上的人都符合」。
+  // 離職者不在名冊上就不列入，他曾任什麼職務也不構成問題，不必為此發警告。
+  const pickNeeded = hits.filter(h => h.confidence === 'ambiguous').length;
+  if (pickNeeded) {
     return { level: 'warn', note:
-      `有 ${byTitle} 位公文只寫職稱，已用現職職稱對應。公文若涉及前一學年度，請確認是否已有人事異動。` };
+      `有 ${pickNeeded} 個職稱在名冊上不只一人符合，請點選正確的人員。` };
+  }
+  const byTitle = hits.filter(h => h.confidence === 'title').length;
+  if (byTitle) {
+    return { level: 'warn', note: `有 ${byTitle} 位公文只寫職稱，職稱沒完全對上，請確認人員。` };
   }
   const byRole = hits.filter(h => h.confidence === 'role').length;
   if (byRole) {
