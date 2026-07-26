@@ -314,15 +314,17 @@ function analyzeDoc(doc) {
     const missingScope = duplicates.some(list =>
       new Set(list.map(p =>
         [p.duty, p.assignment].filter(Boolean).join('／')).filter(Boolean)).size < list.length);
-    const duplicateNote =
-      `同一人有多筆敘獎，已分開保留：${details}。` +
-      (missingScope
-        ? '部分分工或負責範圍未辨識，請修改事由後再核章。'
-        : '事由已依分工或負責範圍分別撰寫，請確認。');
-    assess = {
-      level: assess.level === 'fail' ? 'fail' : 'warn',
-      note: assess.note ? `${assess.note} ${duplicateNote}` : duplicateNote,
-    };
+    // 同一人多筆通常代表不同工作或事由，本身不是異常。
+    // 只有範圍不足、會讓產生的事由相同時，才要求人工區分。
+    if (missingScope) {
+      const duplicateNote =
+        `同一人因不同工作有多筆敘獎，已全部保留：${details}。` +
+        '部分工作範圍未辨識，產生的事由可能相同，請修改事由後再核章。';
+      assess = {
+        level: assess.level === 'fail' ? 'fail' : 'warn',
+        note: assess.note ? `${assess.note} ${duplicateNote}` : duplicateNote,
+      };
+    }
   }
   if (doc.ocrUsed) {
     const confidence = doc.ocrConfidence === null ? '' : `，平均信心值 ${doc.ocrConfidence}%`;

@@ -398,12 +398,24 @@ function detectAssignment(block, pos) {
   if (m) return m[1];
 
   // 群組式名單：「國:甲、乙」「授課教師:甲乙」中的每一位都屬於同一範圍。
-  const groupBefore = block.slice(Math.max(0, pos - 60), pos);
-  const group = groupBefore.match(
-    /(授課教師|行政人員|國語文?|數學?|英語?|國|數|英)[：:]([\u4e00-\u9fa5、，,]{0,40})$/,
-  );
-  if (!group) return '';
-  return ({ 國: '國語', 數: '數學', 英: '英語' })[group[1]] || group[1];
+  // 名單中可能夾有「(校長)」等註記，不能只允許純中文姓名。
+  const groupBefore = block.slice(Math.max(0, pos - 90), pos);
+  const markerRe = /(授課教師|行政人員|國語文?|數學?|英語?|國|數|英)[：:]/g;
+  let marker = null, markerMatch;
+  while ((markerMatch = markerRe.exec(groupBefore)) !== null) marker = markerMatch;
+  if (!marker) return '';
+  const listed = groupBefore.slice(marker.index + marker[0].length);
+  if (listed.length > 80 || /[。；\n]/.test(listed)) return '';
+  const assignment = ({ 國: '國語', 數: '數學', 英: '英語' })[marker[1]] || marker[1];
+
+  // 同一科目可能分屬不同工作，例如「113年成長測驗」及「114年篩選測驗」。
+  // 將最近的測驗名稱併入範圍，才能為同一人的兩筆資料產生不同事由。
+  if (/^(?:國語文?|數學|英語)$/.test(assignment)) {
+    const scopeBefore = block.slice(Math.max(0, pos - 300), pos);
+    const scopes = [...scopeBefore.matchAll(/(11\d年(?:成長測驗|篩選測驗))/g)];
+    if (scopes.length) return scopes[scopes.length - 1][1] + assignment;
+  }
+  return assignment;
 }
 
 
