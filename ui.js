@@ -61,7 +61,6 @@ async function loadRoster(files) {
       `已讀取 ${state.roster.length} 位人員 — 教育人員 ${edu} 位、公務人員 ${state.roster.length - edu} 位` +
       (sub ? `（其中代理教師 ${sub} 位）` : ''));
     if (state.docs.length) reanalyzeDocs();
-    $('#step2').hidden = false;
     render();
   } catch (err) {
     say('#rosterMsg', '讀取失敗：' + err.message, true);
@@ -83,6 +82,10 @@ async function loadCorpus(files) {
 
 /* ---------- 3. 公文 PDF ---------- */
 async function loadDocs(files) {
+  if (!state.roster.length) {
+    say('#docMsg', '請先上傳左側的人員基本資料表，再選取敘獎公文。', true);
+    return;
+  }
   const keyOf = f => `${f.name}|${f.size}|${f.lastModified}`;
   const existing = new Set(state.docs.map(doc => doc.key).filter(Boolean));
   const pdfs = files.filter(f => /\.pdf$/i.test(f.name) && !existing.has(keyOf(f)));
@@ -228,10 +231,20 @@ function refreshSummary() {
       `有 ${over.length} 筆事由超過 100 字上限（${over.map(r => r.person.name).join('、')}），` +
       `WebHR 會拒絕匯入，請先縮短。`;
   }
+  refreshFlow(on.length);
 }
 
 function allRows() {
   return state.docs.flatMap(d => d.rows);
+}
+
+function refreshFlow(selectedCount = 0) {
+  const active = selectedCount ? 4 : state.docs.length ? 3 : state.roster.length ? 2 : 1;
+  document.querySelectorAll('[data-flow-step]').forEach(item => {
+    const step = Number(item.dataset.flowStep);
+    item.classList.toggle('active', step === active);
+    item.classList.toggle('done', step < active);
+  });
 }
 
 function renderDoc(doc) {

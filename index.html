@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600&family=Noto+Serif+TC:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <div class="wrap">
@@ -22,10 +22,10 @@
   </div>
   <p class="lead">讀取教育局敘獎公文，比對校內人員名冊，產出 WebHR 可匯入的 CSV。</p>
   <ol class="flow" aria-label="操作流程">
-    <li class="active"><span>1</span><b>人員資料</b><small>載入校內名冊</small></li>
-    <li><span>2</span><b>敘獎公文</b><small>可一次上傳多份</small></li>
-    <li><span>3</span><b>逐筆核對</b><small>確認姓名與獎度</small></li>
-    <li><span>4</span><b>匯出 CSV</b><small>帶回 WebHR 匯入</small></li>
+    <li class="active" data-flow-step="1"><span>1</span><b>人員資料</b><small>載入校內名冊</small></li>
+    <li data-flow-step="2"><span>2</span><b>敘獎公文</b><small>可一次上傳多份</small></li>
+    <li data-flow-step="3"><span>3</span><b>逐筆核對</b><small>確認姓名與獎度</small></li>
+    <li data-flow-step="4"><span>4</span><b>匯出 CSV</b><small>帶回 WebHR 匯入</small></li>
   </ol>
 </header>
 
@@ -33,9 +33,9 @@
 <section class="step">
   <div class="step-head">
     <div>
-      <span class="step-kicker">STEP 1</span>
-      <h2>先載入人員資料</h2>
-      <p class="hint">系統以名冊為準比對身分證號與職稱；名冊上沒有的人不會出現在結果裡。</p>
+      <span class="step-kicker">STEP 1–2</span>
+      <h2>上傳比對資料與敘獎公文</h2>
+      <p class="hint">先載入人員名冊，再選取敘獎公文。系統會以名冊為準比對受獎人。</p>
     </div>
     <span class="local-note">檔案只在這個分頁中處理</span>
   </div>
@@ -51,18 +51,29 @@
       </div>
       <div class="loaded" id="rosterMsg" hidden></div>
     </div>
-    <div class="upload-card">
-      <div class="upload-label optional"><span>選用</span> 提供相似事由建議</div>
-      <div class="drop" id="corpusDrop" tabindex="0" role="button">
-        <span class="drop-icon" aria-hidden="true">例</span>
-        <strong>歷年獎懲明細表</strong>
-        <span>CPAB1209R · .xls / .xlsx</span>
-        <em>選擇檔案</em>
-        <input type="file">
+    <div class="upload-card required">
+      <div class="upload-label"><span>必要</span> 第 2 步</div>
+      <div class="drop" id="docDrop" tabindex="0" role="button">
+        <span class="drop-icon pdf" aria-hidden="true">PDF</span>
+        <strong>敘獎公文</strong>
+        <span>一次選取所有 PDF，歷任職稱比對會更準確</span>
+        <em>選擇多份 PDF</em>
+        <input type="file" multiple>
       </div>
-      <div class="loaded" id="corpusMsg" hidden></div>
+      <div class="loaded" id="docMsg" hidden></div>
     </div>
   </div>
+
+  <details class="optional-panel">
+    <summary><span>選用：載入歷年獎懲明細</span><small>只用來提供相似事由建議，不影響公文解析</small></summary>
+    <div class="drop compact-drop" id="corpusDrop" tabindex="0" role="button">
+      <span class="drop-icon" aria-hidden="true">例</span>
+      <span class="compact-copy"><strong>歷年獎懲明細表</strong><small>CPAB1209R · .xls / .xlsx</small></span>
+      <em>選擇檔案</em>
+      <input type="file">
+    </div>
+    <div class="loaded" id="corpusMsg" hidden></div>
+  </details>
 
   <details class="settings-panel">
     <summary><span>匯出設定</span><small>機關代碼、校長排除與檔案編碼</small></summary>
@@ -80,25 +91,7 @@
   </details>
 </section>
 
-<!-- 2 -->
-<section class="step" id="step2" hidden>
-  <div class="step-head">
-    <div>
-      <span class="step-kicker">STEP 2</span>
-      <h2>上傳敘獎公文</h2>
-      <p class="hint">可一次選多份。只讀取「擬辦」段落，批核軌跡裡的簽核人不會被當成受獎人。</p>
-    </div>
-  </div>
-  <div class="drop" id="docDrop" tabindex="0" role="button">
-    <span class="drop-icon pdf" aria-hidden="true">PDF</span>
-    <strong>公文 PDF</strong>
-    <span>一次選取所有公文，歷任職稱比對會更準確</span>
-    <em>選擇多份 PDF</em>
-    <input type="file" multiple>
-  </div>
-  <div class="loaded" id="docMsg" hidden></div>
-  <div class="hist" id="history" hidden></div>
-</section>
+<div class="hist history-global" id="history" hidden></div>
 
 <!-- 3 -->
 <section class="step" id="step3" hidden>
