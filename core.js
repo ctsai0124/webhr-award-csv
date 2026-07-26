@@ -2,8 +2,37 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const APP_DATE = '2026-07-27';
+
+
+/* -----------------------------------------------------------
+   異體字正規化
+   人事資料和公文常混用同一個字的不同寫法，肉眼幾乎分不出來，
+   對程式卻是兩個字元。不處理的話「陳佳姸」和「佳妍」會被判成錯字，
+   而畫面上兩個名字看起來完全一樣，使用者根本不知道差在哪。
+   ----------------------------------------------------------- */
+const VARIANT_PAIRS = [
+  '妍姸', '峰峯', '群羣', '裡裏', '為爲', '彥彦', '曉暁', '台臺',
+  '珏玨', '秘祕', '溫温', '青靑', '真眞', '姊姉', '冊册', '兌兑',
+  '匯滙', '敘敍', '床牀', '啟啓', '鵝鵞', '線綫', '污汙', '佩珮',
+  '蒓蓴', '踪蹤', '嘆歎', '毀燬', '裸躶', '恆恒', '游遊', '喆哲',
+];
+
+const VARIANT_MAP = (() => {
+  const m = new Map();
+  for (const pair of VARIANT_PAIRS) {
+    for (const ch of pair) m.set(ch, pair[0]);
+  }
+  return m;
+})();
+
+/** 把異體字統一成同一種寫法再比對 */
+function normVariant(s) {
+  let out = '';
+  for (const ch of String(s || '')) out += VARIANT_MAP.get(ch) || ch;
+  return out;
+}
 
 
 /* -----------------------------------------------------------
@@ -449,13 +478,18 @@ function matchNames(block, roster) {
     for (const p of roster) {
       const n = p.name;
       // 完全相符
-      if (block.startsWith(n, i)) { push(p, i, n, 'exact'); continue; }
+      // 異體字（陳佳姸／陳佳妍）視為同一個名字，不能判成錯字
+      const seg = block.slice(i, i + n.length);
+      if (seg === n || (seg.length === n.length && normVariant(seg) === normVariant(n))) {
+        push(p, i, seg, 'exact'); continue;
+      }
       // 同長度、差一字（抓錯字：江雨薇/江宇薇、陳玟純/陳玟蒓）
       if (n.length >= 3) {
         const w = block.slice(i, i + n.length);
         if (w.length === n.length) {
+          const wn = normVariant(w), nn = normVariant(n);
           let diff = 0;
-          for (let k = 0; k < n.length; k++) if (w[k] !== n[k]) diff++;
+          for (let k = 0; k < n.length; k++) if (wn[k] !== nn[k]) diff++;
           if (diff === 1 && w[0] === n[0] && /^[\u4e00-\u9fa5]+$/.test(w)) {
             push(p, i, w, 'typo', soleTypoMatch(w));
           }
@@ -469,9 +503,13 @@ function matchNames(block, roster) {
   for (const p of roster) {
     if (p.name.length < 3) continue;
     const given = p.name.slice(1);
-    const uniqueGiven = roster.filter(other => other.name.slice(1) === given).length === 1;
+    const givenNorm = normVariant(given);
+    const uniqueGiven = roster.filter(
+      other => normVariant(other.name.slice(1)) === givenNorm).length === 1;
+    // 在正規化後的文字上找位置，異體字（佳妍／佳姸）才對得起來
+    const blockNorm = normVariant(block);
     let idx = -1;
-    while ((idx = block.indexOf(given, idx + 1)) >= 0) {
+    while ((idx = blockNorm.indexOf(givenNorm, idx + 1)) >= 0) {
       if (idx > 0 && block[idx - 1] === p.name[0]) continue; // 已被完整比對抓到
       const after = block.slice(idx + given.length, idx + given.length + 3);
       const before = block.slice(Math.max(0, idx - 12), idx);
@@ -481,7 +519,9 @@ function matchNames(block, roster) {
           /^(?:記功|嘉獎|[、，,])/.test(after));
       // 省略姓氏時，名冊上只有一個人的名字對得起來就等同寫全名；
       // 兩個人同名才需要人工挑。
-      if (TITLE.test(after) || structured) push(p, idx, given, 'partial', uniqueGiven);
+      if (TITLE.test(after) || structured) {
+        push(p, idx, block.slice(idx, idx + given.length), 'partial', uniqueGiven);
+      }
     }
 
     // 只有名且疑似一字錯誤：「佳妍」→ 名冊「佳姸」。
@@ -489,13 +529,15 @@ function matchNames(block, roster) {
       for (let i = 0; i <= block.length - given.length; i++) {
         if (i > 0 && block[i - 1] === p.name[0]) continue;
         const written = block.slice(i, i + given.length);
-        if (!/^[\u4e00-\u9fa5]+$/.test(written) || written === given) continue;
-        if (roster.some(other => other !== p && other.name.slice(1) === written)) continue;
+        const writtenNorm = normVariant(written);
+        if (!/^[\u4e00-\u9fa5]+$/.test(written) || writtenNorm === givenNorm) continue;
+        if (roster.some(other =>
+          other !== p && normVariant(other.name.slice(1)) === writtenNorm)) continue;
         if (hits.some(hit =>
           i < hit.pos + hit.written.length && i + written.length > hit.pos)) continue;
         let diff = 0;
-        for (let k = 0; k < given.length; k++) if (written[k] !== given[k]) diff++;
-        if (diff !== 1 || written[0] !== given[0]) continue;
+        for (let k = 0; k < given.length; k++) if (writtenNorm[k] !== givenNorm[k]) diff++;
+        if (diff !== 1 || writtenNorm[0] !== givenNorm[0]) continue;
         const before = block.slice(Math.max(0, i - 12), i);
         const after = block.slice(i + written.length, i + written.length + 4);
         if (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||

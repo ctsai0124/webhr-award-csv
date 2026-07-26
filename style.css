@@ -468,3 +468,15 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 }
 .lifetime { color: var(--indigo); }
 .visits { color: var(--stone); }
+
+/* ---------- 每份公文的一鍵核章 ---------- */
+.doc-tools { display: flex; align-items: center; gap: 8px; flex: none; }
+.doc-seal {
+  padding: 4px 12px; border-radius: 2px; cursor: pointer; white-space: nowrap;
+  font-family: var(--sans); font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--vermil); background: #fff; color: var(--vermil);
+}
+.doc-seal:hover { background: var(--vermil); color: #fff; }
+.doc-seal.on { border-color: var(--hair); color: var(--stone); font-weight: 400; }
+.doc-seal.on:hover { background: #fff; border-color: var(--vermil); color: var(--vermil); }
+.doc-seal:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }

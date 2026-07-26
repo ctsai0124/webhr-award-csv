@@ -643,6 +643,28 @@ function docCount(doc) {
   });
 }
 
+/**
+ * 這份公文的一鍵核章。
+ * 只處理已經配到獎度的列 —— 沒有獎度的匯出時本來就會被濾掉，
+ * 幫它蓋章只會讓數字看起來對但實際沒進 CSV。
+ */
+function docSealButton(doc) {
+  const usable = doc.rows.filter(r => r.awardCode);
+  if (!usable.length) return null;
+
+  const allOn = usable.every(r => r.include);
+  return el('button', {
+    type: 'button',
+    class: 'doc-seal' + (allOn ? ' on' : ''),
+    title: allOn ? '取消這份公文的所有核章' : `核章這份公文可核的 ${usable.length} 筆`,
+    text: allOn ? '全部取消' : `核章 ${usable.length} 筆`,
+    onclick: () => {
+      for (const r of usable) r.include = !allOn;
+      render();
+    },
+  });
+}
+
 function renderDoc(doc) {
   const m = doc.meta || {};
   const meta = [
@@ -661,7 +683,10 @@ function renderDoc(doc) {
         el('h3', { text: m.subject || doc.file }),
         meta ? el('div', { class: 'doc-meta', text: meta }) : null,
       ),
-      docCount(doc),
+      el('div', { class: 'doc-tools' },
+        docCount(doc),
+        docSealButton(doc),
+      ),
     ),
   );
 
