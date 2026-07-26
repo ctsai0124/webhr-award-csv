@@ -268,7 +268,10 @@ function suggestedReviewPages(doc, meta, block, hits, awards) {
  */
 function autoSeal(p) {
   if (p.confidence === 'exact') return true;
-  if (p.confidence === 'typo' && p.unique !== false) return true;
+  // 弱比對（只寫名又錯一個字）不自動放行，實際只吻合一個字
+  if (p.confidence === 'typo' && p.unique !== false && !p.weak) return true;
+  // 只寫名沒寫姓，但名冊上唯一對得上
+  if (p.confidence === 'partial' && p.unique !== false) return true;
   if (p.confidence === 'self' && p.selfCertain) return true;
   // 職稱完整命中且唯一，等同寫出姓名。
   // 只有批核軌跡顯示這個職務交接過，才需要人工確認是哪一任。
@@ -385,6 +388,7 @@ function analyzeDoc(doc) {
       titleHandover: !!p.titleHandover,
       eraPast: !!(era && era.past),
       unique: p.unique !== false,
+      weak: !!p.weak,
       selfCertain: !!p.selfCertain,
       selfTitle: p.selfTitle || '',
       candidates: p.candidates || null,
@@ -490,16 +494,72 @@ function refreshFlow(selectedCount = 0) {
   });
 }
 
+/**
+ * 把事由拆成「本文」和「依據…函辦理」。
+ * 依據子句由公文表頭機械產生，同一份公文每個人都一樣，
+ * 畫面上講一次就好，但匯出時仍要接回去。
+ */
+function splitReason(reason) {
+  const i = (reason || '').indexOf('\n依據');
+  if (i < 0) return { main: reason || '', basis: '' };
+  return { main: reason.slice(0, i), basis: reason.slice(i + 1) };
+}
+
+function docBasis(doc) {
+  for (const row of doc.rows || []) {
+    const { basis } = splitReason(row.reason);
+    if (basis) return basis;
+  }
+  return '';
+}
+
+/** 這份公文核了幾個人，蓋章時要能立刻看到數字變化 */
+function docCount(doc) {
+  const total = doc.rows.length;
+  if (!total) return el('span', { class: 'doc-count none', text: '無名單' });
+
+  const on = doc.rows.filter(r => r.include);
+  const people = new Set(on.map(r => r.person.id)).size;
+  // 同一人可能因不同分工有多筆，人數和筆數不一致時兩個都要講清楚
+  const detail = people && people !== on.length ? `（${people} 人）` : '';
+
+  const state = on.length === 0 ? 'none' : (on.length === total ? 'all' : 'part');
+  return el('span', {
+    class: 'doc-count ' + state,
+    title: `共 ${total} 筆，已核章 ${on.length} 筆`,
+    text: `已核章 ${on.length} / ${total}${detail}`,
+  });
+}
+
 function renderDoc(doc) {
   const m = doc.meta || {};
+  const meta = [
+    m.agency,
+    m.year ? `${m.year}.${m.month}.${m.day}` : '',
+    m.docNo,
+  ].filter(Boolean).join('　');
+
   const head = el('div', { class: 'doc-head' },
-    el('h3', { text: m.subject || doc.file }),
-    el('div', { class: 'doc-meta', text: [
-      m.agency,
-      m.year ? `${m.year}.${m.month}.${m.day}` : '',
-      m.docNo,
-    ].filter(Boolean).join('　') || doc.file }),
+    el('div', { class: 'doc-head-main' },
+      el('div', { class: 'doc-titles' },
+        // 檔名開頭是案件編號，捲動時那個才是一眼認出公文的識別，放在主旨之上
+        el('div', { class: 'doc-file', title: doc.file },
+          el('i', { class: 'file-mark', 'aria-hidden': 'true' }),
+          el('span', { text: doc.file })),
+        el('h3', { text: m.subject || doc.file }),
+        meta ? el('div', { class: 'doc-meta', text: meta }) : null,
+      ),
+      docCount(doc),
+    ),
   );
+
+  // 依據子句每個人都一樣，在這裡講一次，下面各列就不重複了
+  const basis = docBasis(doc);
+  if (basis) {
+    head.append(el('div', { class: 'doc-basis' },
+      el('span', { class: 'doc-basis-tag', text: '各筆事由後自動接' }),
+      el('span', { text: `${basis}（${basis.length} 字）` })));
+  }
   if (doc.assess && doc.assess.level !== 'ok') {
     head.append(el('div', {
       class: 'doc-note' + (doc.assess.level === 'fail' ? ' fail' : ''),
@@ -534,6 +594,7 @@ const CONF_LABEL = {
   self:      ['ok',    '本人＝承辦人'],
   selfGuess: ['check', '本人待確認'],
   partial:   ['check', '需確認'],
+  partialSure: ['ok',  '省略姓氏'],
   role:      ['typo',  '職稱推定'],
   title:     ['typo',  '職稱對應'],
   titleExact:['ok',    '職稱相符'],
@@ -586,7 +647,8 @@ function renderRow(row) {
 
   // 第一行：狀態、姓名、身分證號、職稱、獎懲結果
   let key = row.confidence;
-  if (key === 'typo' && row.unique !== false) key = 'typoSure';
+  if (key === 'typo' && row.unique !== false && !row.weak) key = 'typoSure';
+  if (key === 'partial' && row.unique !== false) key = 'partialSure';
   if (key === 'self' && !row.selfCertain) key = 'selfGuess';
   if (key === 'titleExact' && row.titleHandover) key = 'titlePast';
   if (key === 'title' && row.titleTier === 'history') key = 'history';
@@ -639,8 +701,16 @@ function renderRow(row) {
         ? `公文寫「${row.written}」，批核軌跡的承辦人是${row.selfTitle} ${row.person.name}`
         : `公文寫「${row.written}」，軌跡沒明寫承辦人，這是依第 1 筆簽核推的` }));
   }
-  if (row.confidence === 'typo' && row.unique !== false) {
+  if (row.confidence === 'typo' && row.unique !== false && !row.weak) {
     line1.append(el('span', { class: 'written', text: `公文誤寫「${row.written}」，已更正` }));
+  }
+  if (row.confidence === 'typo' && row.weak) {
+    line1.append(el('span', { class: 'written',
+      text: `公文只寫「${row.written}」且與名冊差一字，可能是名冊外的人，請確認` }));
+  }
+  if (row.confidence === 'partial' && row.unique !== false) {
+    line1.append(el('span', { class: 'written',
+      text: `公文只寫「${row.written}」，名冊上僅此一人` }));
   }
   if (row.confidence === 'titleExact') {
     line1.append(el('span', { class: 'written',
@@ -660,14 +730,23 @@ function renderRow(row) {
 
   // 獎懲事由
   const count = el('span', { class: 'count' });
+  const { basis } = splitReason(row.reason);
   const ta = el('textarea', {
     'aria-label': `${row.person.name} 的獎懲事由`,
-    oninput: e => { row.reason = e.target.value; updateCount(); refreshSummary(); },
+    rows: '1',
+    oninput: e => {
+      // 畫面上只編輯本文，依據子句在存回去時接上
+      row.reason = basis ? `${e.target.value}\n${basis}` : e.target.value;
+      updateCount();
+      refreshSummary();
+    },
   });
-  ta.value = row.reason;
+  ta.value = splitReason(row.reason).main;
   const updateCount = () => {
+    // 上限算的是含依據的完整字數，那才是 WebHR 檢查的長度
     const n = row.reason.length;
     count.textContent = `${n}/100`;
+    count.title = basis ? `本文 ${n - basis.length - 1} 字 ＋ 依據 ${basis.length} 字` : '';
     count.className = 'count' + (n > 100 ? ' over' : '');
   };
   updateCount();
