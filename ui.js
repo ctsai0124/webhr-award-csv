@@ -276,6 +276,11 @@ function autoSeal(p) {
   // 職稱完整命中且唯一，等同寫出姓名。
   // 只有批核軌跡顯示這個職務交接過，才需要人工確認是哪一任。
   if (p.confidence === 'titleExact' && !p.titleHandover) return true;
+  // 批核意見只抓「批核意見：」之後的內容，簽核者姓名寫在那行之前不會被撈進來，
+  // 所以這裡的姓名完全相符加上明寫的獎度，可靠度等同從擬辦讀到的。
+  if (p.confidence === 'approval' && p.baseConfidence === 'exact') return true;
+  // 姓、職稱、單位三個條件同時吻合，且名冊上只有一人（多人會是 ambiguous）
+  if (p.confidence === 'role') return true;
   return false;
 }
 
@@ -302,10 +307,12 @@ function analyzeDoc(doc) {
     }
   }
 
+  // info 等級：把資料來源講清楚，但不阻擋自動核章。
+  // 批核意見的擷取只取「批核意見：」之後的內容，簽核者姓名不會被誤收。
   let assess = approvalUsed
     ? {
-        level: 'warn',
-        note: '擬辦未列受獎人；僅在批核意見找到明確姓名與獎度，已建立未核章建議資料，請人工確認。',
+        level: 'info',
+        note: '擬辦未列受獎人，姓名與獎度取自批核意見。',
       }
     : assessDoc(block, hits, awards, !!fb, paired);
   if (meta.subjectCount > 1 || meta.proposalCount > 1) {
@@ -415,7 +422,8 @@ function analyzeDoc(doc) {
     };
   }
   for (const row of built) {
-    row.include = row._auto && assess.level === 'ok' && !stillSame.includes(row.person.name);
+    const docOk = assess.level === 'ok' || assess.level === 'info';
+    row.include = row._auto && docOk && !stillSame.includes(row.person.name);
     delete row._auto;
   }
 
@@ -581,7 +589,8 @@ function renderDoc(doc) {
   }
   if (doc.assess && doc.assess.level !== 'ok') {
     head.append(el('div', {
-      class: 'doc-note' + (doc.assess.level === 'fail' ? ' fail' : ''),
+      class: 'doc-note' + (doc.assess.level === 'fail' ? ' fail'
+        : doc.assess.level === 'info' ? ' info' : ''),
       text: doc.assess.note,
     }));
   }
@@ -614,7 +623,8 @@ const CONF_LABEL = {
   selfGuess: ['check', '本人待確認'],
   partial:   ['check', '需確認'],
   partialSure: ['ok',  '省略姓氏'],
-  role:      ['typo',  '職稱推定'],
+  approval:    ['ok',  '批核意見'],
+  role:      ['ok',    '姓＋職稱'],
   title:     ['typo',  '職稱對應'],
   titleExact:['ok',    '職稱相符'],
   titlePast: ['typo',  '職稱相符'],
@@ -726,6 +736,9 @@ function renderRow(row) {
   if (row.confidence === 'typo' && row.weak) {
     line1.append(el('span', { class: 'written',
       text: `公文只寫「${row.written}」且與名冊差一字，可能是名冊外的人，請確認` }));
+  }
+  if (row.confidence === 'approval') {
+    line1.append(el('span', { class: 'written', text: '擬辦沒列名單，取自批核意見' }));
   }
   if (row.confidence === 'partial' && row.unique !== false) {
     line1.append(el('span', { class: 'written',

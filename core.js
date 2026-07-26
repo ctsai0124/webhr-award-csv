@@ -919,7 +919,8 @@ function findApprovalAwards(text, roster) {
     if (!hits.length) continue;
     const paired = pairNameAward(block, hits, awards)
       .filter(item => item.award)
-      .map(item => ({ ...item, confidence: 'approval' }));
+      // 保留原本的比對強度：姓名完全相符才能自動核章
+      .map(item => ({ ...item, baseConfidence: item.confidence, confidence: 'approval' }));
     if (paired.length) candidates.push({ block, awards, paired, index: m.index });
   }
   if (!candidates.length) return null;
@@ -1084,9 +1085,11 @@ function assessDoc(block, hits, awards, hasFallbackAward = false, paired = null)
   if (byTitle) {
     return { level: 'warn', note: `有 ${byTitle} 位公文只寫職稱，職稱沒完全對上，請確認人員。` };
   }
+  // 姓＋職稱＋單位三個條件都吻合且名冊上唯一，確定性足夠，
+  // 只說明比對依據，不要求人工確認。
   const byRole = hits.filter(h => h.confidence === 'role').length;
   if (byRole) {
-    return { level: 'warn', note: `有 ${byRole} 位是依「姓＋職稱」推定的，請確認是不是本人` };
+    return { level: 'info', note: `有 ${byRole} 位公文寫的是「單位＋姓＋職稱」，已對回名冊人員。` };
   }
   return { level: 'ok', note: '' };
 }
@@ -1182,6 +1185,19 @@ function applyDutyToReason(reason, duty) {
 function detectScope(block, pos, written = '') {
   const [s0, s1] = segmentAt(block, pos);
   const AWARD = /(嘉獎?|記功|記大功)[裝訂線]?\s*[一乙二兩三１２1-3]\s*[次支個]/;
+
+  // 競賽類公文同一人多筆，差別多半在班級、組別或名次，優先抓這些
+  const near = block.slice(Math.max(0, pos - 24), pos + written.length + 24);
+  const CONTEST = [
+    /([一二三四五六1-6]\s*年?[甲乙丙丁戊己庚忠孝仁愛信義和平]\s*班?)/,
+    /((?:低|中|高)年級組|幼兒?組|團體組|個人組)/,
+    /(特優|優等|甲等|乙等|第[一二三四五六1-6]名|冠軍|亞軍|季軍)/,
+    /((?:國語文?|數學|英語|自然|社會|資訊|體育|音樂|美術)科?)/,
+  ];
+  for (const re of CONTEST) {
+    const m = near.match(re);
+    if (m) return m[1].replace(/\s+/g, '');
+  }
 
   let lead = block.slice(s0, pos)
     .replace(new RegExp(AWARD.source, 'g'), '')

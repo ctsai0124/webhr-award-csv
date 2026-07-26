@@ -443,3 +443,8 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 }
 .doc-count.all  { border-color: #CBE0D5; background: var(--green-bg); color: var(--green); }
 .doc-count.part { border-color: #E5D5AE; background: var(--amber-bg); color: var(--amber); }
+
+/* info 只是說明資料來源，不是警告，用中性的靛色 */
+.doc-note.info {
+  border-left-color: var(--indigo); background: #F6F8FA; color: var(--indigo);
+}
