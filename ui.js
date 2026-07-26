@@ -505,6 +505,9 @@ function renderMore(row) {
     ...(kind === 'edu' && (row.awardCode === '4001' || row.awardCode === '4002')
       ? [el('span', { class: 'law', text: '教師嘉獎預設：第6條第2項第3款第10目（無法細分時採第10目；「點」不適用）' })]
       : []),
+    ...(kind === 'edu' && row.awardCode === '4010'
+      ? [el('span', { class: 'law', text: '教師記功預設：第6條第2項第2款第9目（無法細分時採第9目；「點」不適用）' })]
+      : []),
     el('span', { class: 'law', text: `教示條款　${row.person.teachClause}（${kind === 'edu' ? '教育人員' : '公務人員'}）` }),
   );
 
