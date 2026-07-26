@@ -481,7 +481,8 @@ function renderMore(row) {
   const kind = row.person.kind;
   const law = LAW[kind];
   const cl = (CLAUSE[kind] && CLAUSE[kind][row.awardCode]) || {};
-  const v = k => (cl[k] === null || cl[k] === undefined ? SENTINEL[k] : cl[k]);
+  // 畫面以空白表示不適用；CSV 匯出時仍由 buildRow 轉為 WebHR 哨兵值。
+  const v = k => (cl[k] === null || cl[k] === undefined ? '' : cl[k]);
 
   const catSel = el('select', {
     'aria-label': '獎懲類別',
@@ -501,6 +502,9 @@ function renderMore(row) {
     el('label', {}, el('span', { text: '獎懲類別' }), catSel),
     el('span', { class: 'law', text: `適用法規　${law.code}　${law.name}` }),
     ...nums,
+    ...(kind === 'edu' && (row.awardCode === '4001' || row.awardCode === '4002')
+      ? [el('span', { class: 'law', text: '教師嘉獎預設：第6條第2項第3款第10目（無法細分時採第10目；「點」不適用）' })]
+      : []),
     el('span', { class: 'law', text: `教示條款　${row.person.teachClause}（${kind === 'edu' ? '教育人員' : '公務人員'}）` }),
   );
 
