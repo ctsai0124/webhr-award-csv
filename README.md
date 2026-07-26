@@ -20,8 +20,9 @@
 | `core.js` | Big5 編碼、公文解析、姓名比對、法規對應 |
 | `ui.js` | 介面互動 |
 | `style.css` | 樣式 |
+| `*.min.js`、`*.wasm`、`*.traineddata.gz` | Excel、PDF、OCR 瀏覽器套件與繁中／英文模型 |
 
-外部相依只有兩個 CDN 套件：SheetJS（讀 Excel）、pdf.js（讀 PDF）。
+SheetJS（讀 Excel）、pdf.js（讀 PDF）與 OCR 所需檔案都隨專案提供，不依賴外部 CDN，也不會把人員資料或公文送到其他伺服器。
 
 ## 使用流程
 

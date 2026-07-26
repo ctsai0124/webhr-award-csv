@@ -142,6 +142,14 @@ function hasUsablePdfText(text) {
   return compact.length >= 80 && (han >= 15 || compact.length >= 180);
 }
 
+function normalizeOcrText(text) {
+  return (text || '')
+    .replace(/([\u3400-\u9FFF])[ \t]+(?=[\u3400-\u9FFF])/g, '$1')
+    .replace(/([\u3400-\u9FFF])[ \t]+(?=[：:，,。；;、])/g, '$1')
+    .replace(/([：:，,。；;、])[ \t]+(?=[\u3400-\u9FFF])/g, '$1')
+    .replace(/[ \t]+/g, ' ');
+}
+
 async function readPdfText(file, onProgress = () => {}) {
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   const pages = [];
@@ -164,6 +172,9 @@ async function readPdfText(file, onProgress = () => {}) {
 
   let currentPage = 0;
   const worker = await window.Tesseract.createWorker(['chi_tra', 'eng'], 1, {
+    workerPath: new URL('tesseract-worker.min.js', window.location.href).href,
+    corePath: new URL('tesseract-core-lstm.wasm.js', window.location.href).href,
+    langPath: new URL('.', window.location.href).href,
     logger: message => {
       if (message.status === 'recognizing text') {
         onProgress(`OCR 第 ${currentPage}/${pages.length} 頁　${Math.round(message.progress * 100)}%`);
@@ -190,7 +201,7 @@ async function readPdfText(file, onProgress = () => {}) {
       context.fillRect(0, 0, canvas.width, canvas.height);
       await pages[i].page.render({ canvasContext: context, viewport }).promise;
       const result = await worker.recognize(canvas);
-      ocrTexts.push(result.data.text || '');
+      ocrTexts.push(normalizeOcrText(result.data.text));
       if (Number.isFinite(result.data.confidence)) confidences.push(result.data.confidence);
       canvas.width = 0;
       canvas.height = 0;
@@ -594,7 +605,7 @@ function stamp() {
 /* ---------- 啟動 ---------- */
 window.addEventListener('DOMContentLoaded', () => {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    new URL('pdf.worker.min.js', window.location.href).href;
 
   wireDrop('#rosterDrop', '.xls,.xlsx', loadRoster);
   wireDrop('#corpusDrop', '.xls,.xlsx', loadCorpus);
