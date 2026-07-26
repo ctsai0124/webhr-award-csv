@@ -375,36 +375,55 @@ function analyzeDoc(doc) {
   const reason = draftReason(meta, block, { withBasis: state.withBasis });
   const category = guessCategory(meta.subject + block);
 
+  const built = paired.map(p => ({
+    include: false,
+    person: p.person,
+    written: p.written,
+    confidence: p.confidence,
+    titleTier: p.titleTier || '',
+    titleHandover: !!p.titleHandover,
+    eraPast: !!(era && era.past),
+    unique: p.unique !== false,
+    weak: !!p.weak,
+    selfCertain: !!p.selfCertain,
+    selfTitle: p.selfTitle || '',
+    candidates: p.candidates || null,
+    tenure: p.tenure || null,
+    duty: p.duty || '',
+    assignment: p.assignment || '',
+    sourcePos: p.pos,
+    occurrenceKey: `${p.person.id}@${p.pos}`,
+    awardCode: p.award ? p.award.code : '',
+    reason: applyOccurrenceToReason(
+      reason,
+      p.duty,
+      duplicateIds.has(p.person.id) ? p.assignment : '',
+    ),
+    category,
+    _auto: autoSeal(p) && !!p.award,
+  }));
+
+  // 同一人多筆而事由撞在一起時，WebHR 會拒絕匯入。
+  // 先自動從擬辦的句段抓出區別寫進事由，真的抓不出來才回頭麻煩人工。
+  const stillSame = differentiateReasons(block, built);
+  if (stillSame.length) {
+    const note = `${stillSame.join('、')} 有多筆敘獎，但擬辦看不出工作範圍的差異，` +
+      '請自行補上區別後再核章。';
+    assess = {
+      level: assess.level === 'fail' ? 'fail' : 'warn',
+      note: assess.note ? `${assess.note} ${note}` : note,
+    };
+  }
+  for (const row of built) {
+    row.include = row._auto && assess.level === 'ok' && !stillSame.includes(row.person.name);
+    delete row._auto;
+  }
+
   Object.assign(doc, {
     meta, block, assess, era, submitter,
     baseReason: reason,
     baseCategory: category,
-    rows: paired.map(p => ({
-      include: autoSeal(p) && !!p.award && assess.level === 'ok',
-      person: p.person,
-      written: p.written,
-      confidence: p.confidence,
-      titleTier: p.titleTier || '',
-      titleHandover: !!p.titleHandover,
-      eraPast: !!(era && era.past),
-      unique: p.unique !== false,
-      weak: !!p.weak,
-      selfCertain: !!p.selfCertain,
-      selfTitle: p.selfTitle || '',
-      candidates: p.candidates || null,
-      tenure: p.tenure || null,
-      duty: p.duty || '',
-      assignment: p.assignment || '',
-      sourcePos: p.pos,
-      occurrenceKey: `${p.person.id}@${p.pos}`,
-      awardCode: p.award ? p.award.code : '',
-      reason: applyOccurrenceToReason(
-        reason,
-        p.duty,
-        duplicateIds.has(p.person.id) ? p.assignment : '',
-      ),
-      category,
-    })),
+    rows: built,
   });
 }
 

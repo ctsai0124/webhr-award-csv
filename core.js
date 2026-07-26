@@ -428,11 +428,11 @@ function matchNames(block, roster) {
   const hits = [];
   const seen = new Set();
 
-  const push = (person, pos, written, confidence, unique = true) => {
+  const push = (person, pos, written, confidence, unique = true, weak = false) => {
     const key = person.id + '@' + pos;
     if (seen.has(key)) return;
     seen.add(key);
-    hits.push({ person, pos, written, confidence, unique });
+    hits.push({ person, pos, written, confidence, unique, weak });
   };
 
   // 一個錯寫的姓名，名冊上只有一個人對得起來才算「可確定的筆誤」。
@@ -476,7 +476,9 @@ function matchNames(block, roster) {
         uniqueGiven &&
         (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||
           /^(?:記功|嘉獎|[、，,])/.test(after));
-      if (TITLE.test(after) || structured) push(p, idx, given, 'partial');
+      // 省略姓氏時，名冊上只有一個人的名字對得起來就等同寫全名；
+      // 兩個人同名才需要人工挑。
+      if (TITLE.test(after) || structured) push(p, idx, given, 'partial', uniqueGiven);
     }
 
     // 只有名且疑似一字錯誤：「佳妍」→ 名冊「佳姸」。
@@ -495,8 +497,10 @@ function matchNames(block, roster) {
         const after = block.slice(i + written.length, i + written.length + 4);
         if (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||
             /^(?:記功|嘉獎|[、，,])/.test(after)) {
-          // 前面已檢查 uniqueGiven 且排除其他人同名，這裡的對應是唯一的
-          push(p, i, written, 'typo', true);
+          // 沒有姓氏定錨，兩個字還錯一個 —— 實際只吻合一個字，太弱。
+          // 名冊上查無此人的離職者（例如寫「怡如」但蔡怡如已離職），
+          // 會被誤配成名冊上的「怡慈」，所以標為弱比對，一律人工確認。
+          push(p, i, written, 'typo', true, true);
         }
       }
     }
@@ -1101,7 +1105,11 @@ function draftReason(meta, block, opts = {}) {
 
   // 優先取主旨裡「」引號內的計畫名稱 — 這通常就是事由核心
   let core = '';
-  const quoted = (meta.subject || '').match(/[「『]([^」』]{6,60})[」』]/);
+  // 引號要成對抓。公文常見巢狀寫法「114年度『高雄數位學園』推廣計畫」，
+  // 若用 [「『]...[」』] 會從外引號開始卻停在內引號的收尾，切出殘缺的名稱。
+  const quoted =
+    (meta.subject || '').match(/「([^「」]{4,60})」/) ||
+    (meta.subject || '').match(/『([^『』]{4,60})』/);
   if (quoted) {
     core = quoted[1];
   } else {
@@ -1163,6 +1171,106 @@ function applyDutyToReason(reason, duty) {
 /**
  * 將同一人的每次分工／負責範圍寫進事由，並維持 WebHR 的 100 字限制。
  */
+/**
+ * 同一人多筆時自動把事由寫成不同的。
+ *
+ * WebHR 不接受同一人有獎懲類別、事由、核定日期完全相同的兩筆，
+ * 所以事由沒區別開就匯不進去。分工（承辦／協辦）和範圍（一忠導師、國語）
+ * 都辨識不出來時，改用各筆在擬辦裡所處的句段當區別依據 ——
+ * 同一人被列兩次，本來就是寫在兩個不同的地方。
+ */
+function detectScope(block, pos, written = '') {
+  const [s0, s1] = segmentAt(block, pos);
+  const AWARD = /(嘉獎?|記功|記大功)[裝訂線]?\s*[一乙二兩三１２1-3]\s*[次支個]/;
+
+  let lead = block.slice(s0, pos)
+    .replace(new RegExp(AWARD.source, 'g'), '')
+    .replace(/[（(][^）)]{0,20}[）)]/g, '')
+    .replace(/^[\s\d.、）)]+/, '');
+
+  // 冒號後面接的是名單，冒號前面那句才是這一組的工作名稱
+  const byColon = lead.match(/([\u4e00-\u9fa5][^：:；;。]{3,24})[：:]\s*[^：:]*$/);
+  if (byColon) return trimScope(byColon[1]);
+
+  // 描述也可能寫在姓名後面：「秦桂屏辦理線上課程建置嘉獎1次」
+  let after = block.slice(pos + written.length, s1);
+  const am = after.match(AWARD);
+  if (am) after = after.slice(0, am.index);
+  after = after
+    .replace(/^(?:老師|教師|主任|組長|護理師|幹事|工友)?[：:、，,]*/, '')
+    .replace(/[、，,：:；;]+$/, '');
+  if (after.length >= 4) return trimScope(after);
+
+  // 都沒有就取句段開頭的描述，砍掉尾端殘留的姓名與標點
+  const plain = lead.replace(/[、，,]\s*[\u4e00-\u9fa5]{2,4}\s*$/, '')
+                    .replace(/[、，,：:；;\s]+$/, '');
+  return plain.length >= 4 ? trimScope(plain) : '';
+}
+
+function trimScope(s) {
+  return s.replace(/^(協助辦理|協助|辦理|承辦|協辦|擬|建議|敘獎名單如下)/, '')
+          .replace(/(人員|名單|如下)$/, '')
+          .replace(/[、，,：:；;]+$/, '')
+          .trim()
+          .slice(0, 24);
+}
+
+/** 把區別詞插在「，辛勞得力」之前的括號裡，符合既有事由的寫法 */
+function insertScope(head, scope) {
+  const i = head.lastIndexOf('，');
+  return i < 0 ? `${head}（${scope}）` : `${head.slice(0, i)}（${scope}）${head.slice(i)}`;
+}
+
+/** 砍掉事由裡已經講過的字，避免「…高雄數位學園…（數位學園教師研習）」這種重複 */
+function trimOverlap(scope, head) {
+  let cut = 0;
+  for (let n = scope.length; n >= 2; n--) {
+    if (head.includes(scope.slice(0, n))) { cut = n; break; }
+  }
+  if (!cut) return scope;
+  const rest = scope.slice(cut).replace(/^[之的與及、，,]+/, '');
+  return rest.length >= 2 ? rest : '';
+}
+
+/**
+ * 把同一人的重複事由改寫成互不相同。
+ * 只在真的會撞在一起時才動手，正常情形不改。
+ */
+function differentiateReasons(block, rows, limit = 100) {
+  const byPerson = new Map();
+  for (const row of rows) {
+    const list = byPerson.get(row.person.id) || [];
+    list.push(row);
+    byPerson.set(row.person.id, list);
+  }
+
+  const unresolved = [];
+  for (const list of byPerson.values()) {
+    if (list.length < 2) continue;
+    if (new Set(list.map(r => r.reason)).size === list.length) continue;
+
+    for (const row of list) {
+      const raw = detectScope(block, row.sourcePos, row.written || '');
+      if (!raw) continue;
+      const parts = String(row.reason).split('\n');
+      const head = parts.shift() || '';
+      const scope = trimOverlap(raw, head);
+      if (!scope) continue;
+
+      const suffix = parts.length ? `\n${parts.join('\n')}` : '';
+      let main = insertScope(head, scope);
+      const room = Math.max(0, limit - suffix.length);
+      if (main.length > room) main = main.slice(0, room);
+      row.reason = main + suffix;
+    }
+
+    if (new Set(list.map(r => r.reason)).size !== list.length) {
+      unresolved.push(list[0].person.name);
+    }
+  }
+  return unresolved;
+}
+
 function applyOccurrenceToReason(reason, duty, assignment, limit = 100) {
   const parts = String(applyDutyToReason(reason, duty) || '').split('\n');
   let main = parts.shift() || '';
