@@ -191,33 +191,93 @@ function itemsToText(items) {
   return out;
 }
 
-/** 抽公文表頭欄位 */
-function parseDocMeta(text) {
-  const flat = text.replace(/[ \t]+/g, '');
+function compareKey(s) {
+  return String(s || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/^[\d-]+/, '')
+    .replace(/[，。；：、（）()「」『』【】\sˇ\-—─_]/g, '')
+    .replace(/(有關|檢送|本市|貴校|本校|請查照|請依說明辦理|詳如說明)/g, '');
+}
 
-  const mDate = flat.match(/發文日期[：:]\s*中華民國(\d{2,3})年(\d{1,2})月(\d{1,2})日/);
-  const mNo = flat.match(/發文字號[：:]\s*([^\s\n]{6,40}?號)/);
+function similarityScore(a, b) {
+  const x = compareKey(a), y = compareKey(b);
+  if (!x || !y) return 0;
+  const grams = s => {
+    const out = new Set();
+    if (s.length === 1) out.add(s);
+    for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+    return out;
+  };
+  const gx = grams(x), gy = grams(y);
+  let common = 0;
+  for (const g of gx) if (gy.has(g)) common++;
+  return common / Math.max(1, Math.min(gx.size, gy.size));
+}
+
+function subjectMatches(text) {
+  return [...String(text || '').matchAll(
+    /主旨[：:]([\s\S]{0,300}?)(?=說明[：:]|正本[：:]|$)/g,
+  )];
+}
+
+function selectSubjectMatch(text, filename = '') {
+  const matches = subjectMatches(text);
+  if (!matches.length) return null;
+  if (!filename || matches.length === 1) return matches[0];
+  return matches.reduce((best, m) =>
+    similarityScore(filename, m[1]) > similarityScore(filename, best[1]) ? m : best);
+}
+
+function nearestMatch(matches, pos) {
+  if (!matches.length) return null;
+  if (!Number.isFinite(pos)) return matches[0];
+  return matches.reduce((best, m) =>
+    Math.abs(m.index - pos) < Math.abs(best.index - pos) ? m : best);
+}
+
+/** 抽公文表頭欄位；PDF 內若有多案，以檔名最接近的主旨為準。 */
+function parseDocMeta(text, filename = '') {
+  const flat = text.replace(/[ \t]+/g, '');
+  const mSub = selectSubjectMatch(text, filename);
+  const subjectPos = mSub ? mSub.index : Number.NaN;
+
+  const mDate = nearestMatch(
+    [...flat.matchAll(/發文日期[：:]\s*中華民國(\d{2,3})年(\d{1,2})月(\d{1,2})日/g)],
+    subjectPos,
+  );
+  const mNo = nearestMatch(
+    [...flat.matchAll(/發文字號[：:]\s*([^\s\n]{6,40}?號)/g)],
+    subjectPos,
+  );
 
   // 發文機關：找「XXX 函」那一行
   let agency = '';
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  for (const l of lines.slice(0, 60)) {
+  const agencyMatches = [];
+  let linePos = 0;
+  for (const rawLine of text.split('\n')) {
+    const l = rawLine.trim();
     const m = l.match(/^([\u4e00-\u9fa5]{4,20}?)\s*函$/);
-    if (m) { agency = m[1]; break; }
+    if (m) agencyMatches.push({ 1: m[1], index: linePos });
+    linePos += rawLine.length + 1;
   }
+  const mAgency = nearestMatch(agencyMatches, subjectPos);
+  if (mAgency) agency = mAgency[1];
   if (!agency) {
-    const m = flat.match(/([\u4e00-\u9fa5]{4,20}?)函[\s\S]{0,80}?地址[：:]/);
+    const m = nearestMatch(
+      [...flat.matchAll(/([\u4e00-\u9fa5]{4,20}?)函[\s\S]{0,80}?地址[：:]/g)],
+      subjectPos,
+    );
     if (m) agency = m[1];
   }
 
   // 主旨：到「說明」或「正本」為止
   let subject = '';
-  const mSub = text.match(/主旨[：:]([\s\S]{0,300}?)(?=說明[：:]|正本[：:]|$)/);
   if (mSub) subject = mSub[1].replace(/\s+/g, '').replace(/[。．]+$/, '');
 
   // 說明段：主旨講的是「這份公文要幹嘛」，說明才寫「同仁做了什麼」
   let body = '';
-  const mBody = text.match(/說明[：:]([\s\S]{0,900}?)(?=正本[：:]|副本[：:]|$)/);
+  const bodySource = mSub ? text.slice(mSub.index + mSub[0].length) : text;
+  const mBody = bodySource.match(/說明[：:]([\s\S]{0,900}?)(?=正本[：:]|副本[：:]|$)/);
   if (mBody) body = cleanBlock(mBody[1]);
 
   return {
@@ -228,6 +288,8 @@ function parseDocMeta(text) {
     docNo: mNo ? mNo[1] : '',
     subject,
     body,
+    subjectCount: subjectMatches(text).length,
+    proposalCount: proposalMatches(text).length,
   };
 }
 
@@ -236,27 +298,43 @@ function parseDocMeta(text) {
  * 這一步很關鍵：批核軌跡裡會出現校長、人事主任等簽核者，
  * 他們不是受獎人，必須排除在解析範圍外。
  */
-function extractProposal(text) {
+function proposalMatches(text) {
   const END = /(批核軌跡|批示\s|會辦\s|承辦\s高雄|欄位批核紀錄|貼紙備註資訊|意見[：:])/;
+  const out = [];
+  const source = String(text || '');
+  const proposalMarkers = [...source.matchAll(/擬辦[：:]/g)];
+  const markers = proposalMarkers.length
+    ? proposalMarkers
+    : [...source.matchAll(/承辦意見[：:]/g)];
 
-  let start = -1, offset = 0;
-
-  // 格式一：有「擬辦：」或「承辦意見：」標籤
-  const mProp = text.match(/(擬辦|承辦意見)[：:]/);
-  if (mProp) {
-    start = mProp.index; offset = mProp[0].length;
-  } else {
-    // 格式二：電子公文「意見及流程 / 文號：xxxxx」之後直接接內容，沒有擬辦標籤
-    const mFlow = text.match(/意見及流程[\s\S]{0,40}?文號[：:]\s*\d+\s*/);
-    if (mFlow) { start = mFlow.index; offset = mFlow[0].length; }
+  for (const m of markers) {
+    let block = text.slice(m.index + m[0].length);
+    const e = block.search(END);
+    if (e >= 0) block = block.slice(0, e);
+    out.push({ index: m.index, block: cleanBlock(block).slice(0, 6000) });
   }
-  if (start < 0) return '';
+  if (!out.length) {
+    // 格式二：電子公文「意見及流程 / 文號：xxxxx」之後直接接內容，沒有擬辦標籤
+    for (const m of String(text || '').matchAll(
+      /意見及流程[\s\S]{0,40}?文號[：:]\s*\d+\s*/g,
+    )) {
+      let block = text.slice(m.index + m[0].length);
+      const e = block.search(END);
+      if (e >= 0) block = block.slice(0, e);
+      out.push({ index: m.index, block: cleanBlock(block).slice(0, 6000) });
+    }
+  }
+  return out;
+}
 
-  let block = text.slice(start + offset);
-  const e = block.search(END);
-  if (e >= 0) block = block.slice(0, e);
+function extractProposal(text, filename = '') {
+  const proposals = proposalMatches(text);
+  if (!proposals.length) return '';
+  if (proposals.length === 1) return proposals[0].block;
 
-  return cleanBlock(block).slice(0, 1200);
+  const subject = selectSubjectMatch(text, filename);
+  if (!subject) return proposals[0].block;
+  return nearestMatch(proposals, subject.index).block;
 }
 
 /** 清掉 PDF 裝訂線的點狀雜訊，這些點會把詞切開（例：承裝﹒﹒﹒辦人員） */
@@ -268,6 +346,8 @@ function cleanBlock(s) {
     .join('\n')
     .replace(/[裝訂線]?[﹒·]{2,}/g, '')
     .replace(/[﹒]/g, '')
+    .replace(/[奬奖]/g, '獎')
+    .replace(/[敍叙]/g, '敘')
     .replace(/\s+/g, '');
 }
 
@@ -315,7 +395,15 @@ function detectAssignment(block, pos) {
     '教務|學務|訓導|輔導|總務|教導|人事|主計|會計|資訊)?';
   const title = '(?:導師|主任|組長|護理師|幹事|執秘|秘書|觀察員)';
   const m = before.match(new RegExp(`(${qualifier}${title})$`));
-  return m ? m[1] : '';
+  if (m) return m[1];
+
+  // 群組式名單：「國:甲、乙」「授課教師:甲乙」中的每一位都屬於同一範圍。
+  const groupBefore = block.slice(Math.max(0, pos - 60), pos);
+  const group = groupBefore.match(
+    /(授課教師|行政人員|國語文?|數學?|英語?|國|數|英)[：:]([\u4e00-\u9fa5、，,]{0,40})$/,
+  );
+  if (!group) return '';
+  return ({ 國: '國語', 數: '數學', 英: '英語' })[group[1]] || group[1];
 }
 
 
@@ -358,11 +446,38 @@ function matchNames(block, roster) {
   for (const p of roster) {
     if (p.name.length < 3) continue;
     const given = p.name.slice(1);
+    const uniqueGiven = roster.filter(other => other.name.slice(1) === given).length === 1;
     let idx = -1;
     while ((idx = block.indexOf(given, idx + 1)) >= 0) {
       if (idx > 0 && block[idx - 1] === p.name[0]) continue; // 已被完整比對抓到
       const after = block.slice(idx + given.length, idx + given.length + 3);
-      if (TITLE.test(after)) push(p, idx, given, 'partial');
+      const before = block.slice(Math.max(0, idx - 12), idx);
+      const structured =
+        uniqueGiven &&
+        (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||
+          /^(?:記功|嘉獎|[、，,])/.test(after));
+      if (TITLE.test(after) || structured) push(p, idx, given, 'partial');
+    }
+
+    // 只有名且疑似一字錯誤：「佳妍」→ 名冊「佳姸」。
+    if (uniqueGiven) {
+      for (let i = 0; i <= block.length - given.length; i++) {
+        if (i > 0 && block[i - 1] === p.name[0]) continue;
+        const written = block.slice(i, i + given.length);
+        if (!/^[\u4e00-\u9fa5]+$/.test(written) || written === given) continue;
+        if (roster.some(other => other !== p && other.name.slice(1) === written)) continue;
+        if (hits.some(hit =>
+          i < hit.pos + hit.written.length && i + written.length > hit.pos)) continue;
+        let diff = 0;
+        for (let k = 0; k < given.length; k++) if (written[k] !== given[k]) diff++;
+        if (diff !== 1 || written[0] !== given[0]) continue;
+        const before = block.slice(Math.max(0, i - 12), i);
+        const after = block.slice(i + written.length, i + written.length + 4);
+        if (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||
+            /^(?:記功|嘉獎|[、，,])/.test(after)) {
+          push(p, i, written, 'typo');
+        }
+      }
     }
   }
 
@@ -424,7 +539,7 @@ const fmtRoc = (n) => `${Math.floor(n / 10000)}/${String(Math.floor(n / 100) % 1
    ----------------------------------------------------------- */
 
 // 「敬會人事主任」是會辦程序不是受獎人，這些前置詞要擋掉
-const PROCEDURAL = /(敬會|會辦|文會|陳送|陳核|送請|知會|簽會|轉陳|呈)$/;
+const PROCEDURAL = /(敬會|會辦|文會|陳送|陳核|送請|知會|簽會|轉陳|呈)[^。；，,]{0,8}$/;
 
 function matchByTitle(block, roster, taken = new Set(), history = null, era = null) {
   const hits = [];
@@ -434,7 +549,7 @@ function matchByTitle(block, roster, taken = new Set(), history = null, era = nu
   while ((m = re.exec(block)) !== null) {
     const [full, qualifier, role] = m;
     if (taken.has(m.index)) continue;
-    if (PROCEDURAL.test(block.slice(Math.max(0, m.index - 3), m.index))) continue;
+    if (PROCEDURAL.test(block.slice(Math.max(0, m.index - 12), m.index))) continue;
 
     const roleKeys = ROLE_ALIAS[role] || [role];
     const hasRole = p => roleKeys.some(k => p.title.includes(k));
@@ -660,12 +775,49 @@ function findAwards(block) {
  * 例：「茲同意每人敘嘉獎1次」— 獎度在函裡，擬辦只寫誰獲獎。
  */
 function findFallbackAward(text) {
-  const m = text.match(/(?:敘|核予|同意|各)[^。\n]{0,24}?(嘉獎?|記功)\s*([一二三１２1-3])\s*次/);
+  const normalized = String(text || '')
+    .replace(/[奬奖]/g, '獎')
+    .replace(/[敍叙]/g, '敘');
+  let m = normalized.match(/(?:敘|核予|同意|各)[^。\n]{0,24}?(嘉獎?|記功)\s*([一二三１２1-3])\s*次/);
+  // 評鑑公文常在擬辦只寫「本校成績為優等」，獎度另列於來文規則。
+  if (!m) {
+    const grade = normalized.match(/成績為[：:]?(特優|優等|甲等)/);
+    if (grade) {
+      const rule = normalized.match(
+        new RegExp(`${grade[1]}[：:]?[^。\\n]{0,50}?(嘉獎?|記功)\\s*([一二三１２1-3])\\s*次`),
+      );
+      if (rule) m = rule;
+    }
+  }
   if (!m) return null;
   const kind = m[1].startsWith('嘉') ? '嘉獎' : '記功';
   const n = CN_NUM[m[2]] ?? 1;
   const code = kind === '嘉獎' ? (n === 2 ? '4002' : '4001') : (n === 1 ? '4010' : null);
   return { pos: -1, code, label: `${kind}${n === 2 ? '二' : '一'}次`, raw: m[0], fallback: true };
+}
+
+/**
+ * 擬辦完全沒有名單時，保守檢查「批核意見」中的明確敘獎句。
+ * 只取批核意見冒號後的文字，不讀簽核者職稱／姓名；
+ * 且必須同時命中名冊姓名與獎度，才提供未核章的人工確認資料。
+ */
+function findApprovalAwards(text, roster) {
+  const candidates = [];
+  for (const m of String(text || '').matchAll(
+    /批核意見[：:]([\s\S]{0,500}?)(?=\n\s*\d+\.\s|欄位批核紀錄|貼紙備註資訊|$)/g,
+  )) {
+    const block = cleanBlock(m[1]);
+    const awards = findAwards(block);
+    if (!awards.length) continue;
+    const hits = matchNames(block, roster);
+    if (!hits.length) continue;
+    const paired = pairNameAward(block, hits, awards)
+      .filter(item => item.award)
+      .map(item => ({ ...item, confidence: 'approval' }));
+    if (paired.length) candidates.push({ block, awards, paired, index: m.index });
+  }
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.paired.length - a.paired.length)[0];
 }
 
 /**
@@ -686,7 +838,8 @@ function findFallbackAward(text) {
  */
 function segmentAt(block, pos) {
   // 句段邊界：句號、分號、換行，以及「1.」「一、」這種條列編號
-  const re = /[。；\n]|[0-9]\s*[.、]|[一二三四五六七八九十]\s*、/g;
+  // 數字條列前一字不得也是數字，避免把 90.91% 的小數點當成新段落。
+  const re = /[。；\n]|(?<![0-9])[0-9]\s*[.、]|[一二三四五六七八九十]\s*、/g;
   let start = 0, end = block.length, m;
   while ((m = re.exec(block)) !== null) {
     if (m.index < pos) start = m.index + m[0].length;
@@ -726,13 +879,32 @@ function pairNameAward(block, hits, awards, opts = {}) {
       .filter(other => other !== a && other.pos >= s0 && other.pos < a.pos)
       .sort((x, y) => y.pos - x.pos)[0];
     const scopeStart = previous ? previous.pos + previous.raw.length : s0;
-    const inSeg = result.filter(r => r.pos >= scopeStart && r.pos < s1);
+    // 「各／每人」獎度通常寫在名單後面，只套用獎度之前列出的人；
+    // 避免「甲乙各嘉獎1次，丙嘉獎2次」把丙也先吃成嘉獎1次。
+    const inSeg = result.filter(r => r.pos >= scopeStart && r.pos < a.pos);
     for (const r of inSeg) if (!r.award) r.award = a;
   }
 
   const ordinary = awards
     .map((award, index) => ({ award, index }))
     .filter(({ award }) => !award.heading && !award.shared);
+
+  // 沒寫「各」但明顯是群組名單：「協助人員甲、乙、丙嘉獎1次」。
+  // 只在同句、前一個獎度之後至少列出兩人時才視為共用，避免吃到前一組名單。
+  for (const { award: a, index } of ordinary) {
+    const [s0] = segmentAt(block, a.pos);
+    const previous = awards
+      .filter(other => other !== a && other.pos >= s0 && other.pos < a.pos)
+      .sort((x, y) => y.pos - x.pos)[0];
+    const scopeStart = previous ? previous.pos + previous.raw.length : s0;
+    const inGroup = result.filter(r => !r.award && r.pos >= scopeStart && r.pos < a.pos);
+    if (inGroup.length < 2) continue;
+    const lead = block.slice(scopeStart, inGroup[0].pos);
+    if (!/(人員|名單|導師|教師|主任|組長|為|[:：])/.test(lead)) continue;
+    for (const r of inGroup) r.award = a;
+    a.group = true;
+    claimed.add(index);
+  }
 
   const hasNear = (r, direction) => ordinary.some(({ award }) => {
     const d = direction === 'forward' ? award.pos - r.pos : r.pos - award.pos;
@@ -770,19 +942,31 @@ function pairNameAward(block, hits, awards, opts = {}) {
  * 姓名數和獎度數對不起來，通常表示 PDF 的表格排版在抽文字時被打亂了，
  * 這種情況配對結果不可信，要整份標記人工核對。
  */
-function assessDoc(block, hits, awards) {
+function assessDoc(block, hits, awards, hasFallbackAward = false, paired = null) {
   if (!block) return { level: 'fail', note: '找不到擬辦區塊，無法解析名單' };
   if (!hits.length) {
     return /主任|組長|導師|護理師|校長/.test(block)
       ? { level: 'fail', note: '擬辦只寫職稱沒有姓名，需自行指定人員' }
       : { level: 'fail', note: '擬辦區塊中找不到名冊上的人員' };
   }
-  const shared = awards.some(a => a.shared);
+  if (!awards.length) {
+    return hasFallbackAward
+      ? { level: 'warn', note: '擬辦沒寫獎度，已改用來文本文的獎度' }
+      : { level: 'fail', note: '擬辦與來文全文都找不到明確獎度，請人工確認' };
+  }
+  if (paired) {
+    const unmatched = paired.filter(item => !item.award).length;
+    if (unmatched) {
+      return {
+        level: 'warn',
+        note: `有 ${unmatched} 位人員未能配到獎度，請查看原公文後人工指定`,
+      };
+    }
+  }
+  const shared = awards.some(a => a.shared || a.heading || a.group);
   if (awards.length && !shared && hits.length !== awards.length) {
     return { level: 'warn', note: `找到 ${hits.length} 位人員但 ${awards.length} 個獎度，配對可能錯位，請逐筆核對` };
   }
-  if (!awards.length) return { level: 'warn', note: '擬辦沒寫獎度，已改用來文本文的獎度' };
-
   const byTitle = hits.filter(h => h.confidence === 'title' || h.confidence === 'ambiguous').length;
   if (byTitle) {
     return { level: 'warn', note:

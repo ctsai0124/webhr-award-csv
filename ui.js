@@ -106,6 +106,7 @@ async function loadDocs(files) {
         key: keyOf(pdfs[i]),
         file: pdfs[i].name,
         text: result.text,
+        pageTexts: result.pageTexts,
         ocrUsed: result.ocrUsed,
         ocrPages: result.ocrPages,
         ocrConfidence: result.ocrConfidence,
@@ -114,7 +115,8 @@ async function loadDocs(files) {
       state.signers.push(...extractSigners(result.text));
     } catch (err) {
       state.docs.push({
-        key: keyOf(pdfs[i]), file: pdfs[i].name, text: '', meta: {}, block: '', rows: [],
+        key: keyOf(pdfs[i]), file: pdfs[i].name, text: '', pageTexts: [],
+        meta: {}, block: '', rows: [],
         assess: { level: 'fail', note: 'PDF 讀取失敗：' + err.message },
       });
     }
@@ -168,7 +170,13 @@ async function readPdfText(file, onProgress = () => {}) {
 
   const nativeText = pages.map(p => p.text).join('\n');
   if (hasUsablePdfText(nativeText)) {
-    return { text: nativeText, ocrUsed: false, ocrPages: [], ocrConfidence: null };
+    return {
+      text: nativeText,
+      pageTexts: pages.map(p => p.text),
+      ocrUsed: false,
+      ocrPages: [],
+      ocrConfidence: null,
+    };
   }
 
   if (!window.Tesseract || typeof window.Tesseract.createWorker !== 'function') {
@@ -217,6 +225,7 @@ async function readPdfText(file, onProgress = () => {}) {
 
   return {
     text: ocrTexts.join('\n'),
+    pageTexts: ocrTexts,
     ocrUsed: true,
     ocrPages: pages.map((_, i) => i + 1),
     ocrConfidence: confidences.length
@@ -225,20 +234,69 @@ async function readPdfText(file, onProgress = () => {}) {
   };
 }
 
+function bestPagesForText(pageTexts, target, limit = 2) {
+  if (!target || !pageTexts?.length) return [];
+  return pageTexts
+    .map((text, index) => ({ page: index + 1, score: similarityScore(text, target) }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => item.page);
+}
+
+function suggestedReviewPages(doc, meta, block, hits, awards) {
+  const pages = new Set([
+    ...bestPagesForText(doc.pageTexts, block, 1),
+    ...bestPagesForText(doc.pageTexts, meta.subject, 1),
+  ]);
+
+  if (!hits.length || !awards.length) {
+    (doc.pageTexts || []).forEach((text, index) => {
+      if (/(?:敘|敍)[獎奬]|嘉[獎奬]|記功|獎勵額度|敘獎名單/.test(text)) {
+        pages.add(index + 1);
+      }
+    });
+  }
+  return [...pages].sort((a, b) => a - b).slice(0, 6);
+}
+
 function analyzeDoc(doc) {
   const text = doc.text;
-  const meta = parseDocMeta(text);
-  const block = extractProposal(text);
+  const meta = parseDocMeta(text, doc.file);
+  const block = extractProposal(text, doc.file);
   const era = detectEra(meta.subject, meta.year);
 
   let hits = matchAll(block, state.roster, state.history, era);
 
-  const awards = findAwards(block);
+  let awards = findAwards(block);
   let paired = pairNameAward(block, hits, awards);
   const fb = findFallbackAward(text);
-  if (fb) paired = paired.map(p => (p.award ? p : { ...p, award: fb }));
+  if (fb && !awards.length) paired = paired.map(p => (p.award ? p : { ...p, award: fb }));
+  let approvalUsed = null;
+  if (!hits.length) {
+    approvalUsed = findApprovalAwards(text, state.roster);
+    if (approvalUsed) {
+      hits = approvalUsed.paired;
+      awards = approvalUsed.awards;
+      paired = approvalUsed.paired;
+    }
+  }
 
-  let assess = assessDoc(block, hits, awards);
+  let assess = approvalUsed
+    ? {
+        level: 'warn',
+        note: '擬辦未列受獎人；僅在批核意見找到明確姓名與獎度，已建立未核章建議資料，請人工確認。',
+      }
+    : assessDoc(block, hits, awards, !!fb, paired);
+  if (meta.subjectCount > 1 || meta.proposalCount > 1) {
+    const sectionNote =
+      `PDF 內含 ${meta.subjectCount} 組主旨、${meta.proposalCount} 組擬辦，` +
+      '已依檔名選擇最相近案件，請確認主旨與名單。';
+    assess = {
+      level: assess.level === 'fail' ? 'fail' : 'warn',
+      note: assess.note ? `${sectionNote} ${assess.note}` : sectionNote,
+    };
+  }
   const duplicateGroups = new Map();
   for (const p of paired) {
     const list = duplicateGroups.get(p.person.id) || [];
@@ -275,6 +333,22 @@ function analyzeDoc(doc) {
       level: assess.level === 'fail' ? 'fail' : 'warn',
       note: assess.note ? `${ocrNote} ${assess.note}` : ocrNote,
     };
+  }
+  if (assess.level !== 'ok' || !paired.length) {
+    const reviewPages = suggestedReviewPages(doc, meta, block, hits, awards);
+    if (approvalUsed) {
+      for (const page of bestPagesForText(doc.pageTexts, approvalUsed.block, 2)) {
+        if (!reviewPages.includes(page)) reviewPages.push(page);
+      }
+      reviewPages.sort((a, b) => a - b);
+    }
+    if (reviewPages.length) {
+      const pageNote = `建議查看第 ${reviewPages.join('、')} 頁的擬辦、敘獎名單或獎度說明。`;
+      assess.note = assess.note ? `${assess.note} ${pageNote}` : pageNote;
+    }
+    doc.reviewPages = reviewPages;
+  } else {
+    doc.reviewPages = [];
   }
   const reason = draftReason(meta, block, { withBasis: state.withBasis });
   const category = guessCategory(meta.subject + block);
