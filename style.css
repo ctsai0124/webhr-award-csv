@@ -164,6 +164,8 @@ header h1 {
   background: var(--green-bg);
   color: var(--green);
   border: 1px solid #CBE0D5;
+  white-space: pre-line;
+  line-height: 1.65;
 }
 .loaded.err { background: var(--red-bg); color: var(--vermil); border-color: #F0D3CF; }
 .loaded b { font-weight: 600; }

@@ -129,9 +129,14 @@ async function loadDocs(files) {
 
   const n = state.docs.reduce((s, d) => s + d.rows.length, 0);
   const ocrCount = state.docs.filter(d => d.ocrUsed).length;
+  const perDoc = state.docs.map(doc => {
+    const people = new Set(doc.rows.map(row => row.person.id)).size;
+    return `• ${doc.file}：${people} 人（${doc.rows.length} 筆）`;
+  }).join('\n');
   say('#docMsg',
     `已載入 ${state.docs.length} 份公文，解析出 ${n} 筆敘獎資料` +
-    (ocrCount ? `；其中 ${ocrCount} 份使用瀏覽器 OCR，請逐筆核對` : ''));
+    (ocrCount ? `；其中 ${ocrCount} 份使用瀏覽器 OCR，請逐筆核對` : '') +
+    (perDoc ? `\n${perDoc}` : ''));
   $('#step3').hidden = false;
   $('#step4').hidden = false;
 }
@@ -234,6 +239,33 @@ function analyzeDoc(doc) {
   if (fb) paired = paired.map(p => (p.award ? p : { ...p, award: fb }));
 
   let assess = assessDoc(block, hits, awards);
+  const duplicateGroups = new Map();
+  for (const p of paired) {
+    const list = duplicateGroups.get(p.person.id) || [];
+    list.push(p);
+    duplicateGroups.set(p.person.id, list);
+  }
+  const duplicates = [...duplicateGroups.values()].filter(list => list.length > 1);
+  const duplicateIds = new Set(duplicates.map(list => list[0].person.id));
+  if (duplicates.length) {
+    const details = duplicates.map(list => {
+      const scopes = [...new Set(list.map(p =>
+        [p.duty, p.assignment].filter(Boolean).join('／')).filter(Boolean))];
+      return `${list[0].person.name}${scopes.length ? `（${scopes.join('、')}）` : ''}${list.length}筆`;
+    }).join('、');
+    const missingScope = duplicates.some(list =>
+      new Set(list.map(p =>
+        [p.duty, p.assignment].filter(Boolean).join('／')).filter(Boolean)).size < list.length);
+    const duplicateNote =
+      `同一人有多筆敘獎，已分開保留：${details}。` +
+      (missingScope
+        ? '部分分工或負責範圍未辨識，請修改事由後再核章。'
+        : '事由已依分工或負責範圍分別撰寫，請確認。');
+    assess = {
+      level: assess.level === 'fail' ? 'fail' : 'warn',
+      note: assess.note ? `${assess.note} ${duplicateNote}` : duplicateNote,
+    };
+  }
   if (doc.ocrUsed) {
     const confidence = doc.ocrConfidence === null ? '' : `，平均信心值 ${doc.ocrConfidence}%`;
     const ocrNote =
@@ -256,8 +288,16 @@ function analyzeDoc(doc) {
       confidence: p.confidence,
       candidates: p.candidates || null,
       tenure: p.tenure || null,
+      duty: p.duty || '',
+      assignment: p.assignment || '',
+      sourcePos: p.pos,
+      occurrenceKey: `${p.person.id}@${p.pos}`,
       awardCode: p.award ? p.award.code : '',
-      reason,
+      reason: applyOccurrenceToReason(
+        reason,
+        p.duty,
+        duplicateIds.has(p.person.id) ? p.assignment : '',
+      ),
       category,
     })),
   });
@@ -269,11 +309,14 @@ function reanalyzeDocs(opts = {}) {
   const preserveReason = opts.preserveReason !== false;
   for (const doc of state.docs) {
     if (!doc.text) continue;
-    const old = new Map((doc.rows || []).map(row => [row.person.id, row]));
+    const old = new Map((doc.rows || []).map(row => [
+      row.occurrenceKey || `${row.person.id}@${row.sourcePos ?? ''}`,
+      row,
+    ]));
     analyzeDoc(doc);
     if (!preserve) continue;
     for (const row of doc.rows) {
-      const prior = old.get(row.person.id);
+      const prior = old.get(row.occurrenceKey);
       if (!prior) continue;
       row.include = prior.include;
       row.awardCode = prior.awardCode;

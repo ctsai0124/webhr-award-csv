@@ -271,6 +271,53 @@ function cleanBlock(s) {
     .replace(/\s+/g, '');
 }
 
+/**
+ * 取姓名附近最近的分工標記。
+ * 同一人在同一案可能分別以主辦、承辦、協辦身分各敘一次，
+ * 這個標記會用來保留多筆資料並把事由寫成不同內容。
+ */
+function detectDuty(block, pos, written = '') {
+  const beforeStart = Math.max(
+    block.lastIndexOf('。', pos - 1),
+    block.lastIndexOf('；', pos - 1),
+    block.lastIndexOf('\n', pos - 1),
+    pos - 30,
+  ) + 1;
+  let before = block.slice(Math.max(0, beforeStart), pos);
+  // 獎度通常是上一列的結尾或本列的開頭；不要把更前一列的「承辦」沿用到下一人。
+  const lastAward = Math.max(before.lastIndexOf('嘉獎'), before.lastIndexOf('記功'));
+  if (lastAward >= 0) before = before.slice(lastAward + 2);
+  const dutyRe = /(主要承辦|協助辦理|主辦|承辦|協辦|協助)(?:人員|單位)?/g;
+  let duty = '', m;
+  while ((m = dutyRe.exec(before)) !== null) duty = m[1];
+
+  if (!duty) {
+    const after = block.slice(pos + written.length, pos + written.length + 16);
+    const afterMatch = after.match(
+      /^(?:老師|教師|主任|組長|護理師|幹事)?(?:(?:[（(：:、，,]+(主要承辦|協助辦理|主辦|承辦|協辦|協助))|(?:(主要承辦|協助辦理|主辦|承辦|協辦|協助)(?:人員|單位)))/,
+    );
+    if (afterMatch) duty = afterMatch[1] || afterMatch[2];
+  }
+
+  if (duty === '主要承辦') return '承辦';
+  return duty;
+}
+
+/**
+ * 取姓名前緊鄰的班級或職務標記。
+ * 例如同一位教師分別列在「一忠導師李雅玲」與「四忠導師李雅玲」，
+ * 兩筆都要保留，且事由需能分辨其負責範圍。
+ */
+function detectAssignment(block, pos) {
+  const before = block.slice(Math.max(0, pos - 16), pos);
+  const qualifier =
+    '(?:[一二三四五六七八九十\\d]{1,2}[忠孝仁愛信義和平]?|幼兒園|特教班|資源班|' +
+    '教務|學務|訓導|輔導|總務|教導|人事|主計|會計|資訊)?';
+  const title = '(?:導師|主任|組長|護理師|幹事|執秘|秘書|觀察員)';
+  const m = before.match(new RegExp(`(${qualifier}${title})$`));
+  return m ? m[1] : '';
+}
+
 
 /* -----------------------------------------------------------
    6. 姓名比對
@@ -319,13 +366,8 @@ function matchNames(block, roster) {
     }
   }
 
-  // 同一人在同一區塊出現多次，只留最前面那筆
-  const best = new Map();
-  for (const h of hits) {
-    const cur = best.get(h.person.id);
-    if (!cur || h.pos < cur.pos) best.set(h.person.id, h);
-  }
-  return [...best.values()].sort((a, b) => a.pos - b.pos);
+  // 不再依身分證號去重。同一人可能因主辦、承辦、協辦等不同分工敘獎多次。
+  return hits.sort((a, b) => a.pos - b.pos);
 }
 
 
@@ -474,9 +516,10 @@ function matchAll(block, roster, history = null, era = null) {
     for (const h of list) for (let i = 0; i < h.written.length; i++) s.add(h.pos + i);
     return s;
   };
-  const has = (list, h) => list.some(d => d.person.id === h.person.id);
+  // 明確姓名可以在不同位置重複出現；推定的職稱則不可再製造同人的假重複。
+  const hasPerson = (list, h) => list.some(d => d.person.id === h.person.id);
 
-  const byRole = matchByRole(block, roster, cover(found)).filter(h => !has(found, h));
+  const byRole = matchByRole(block, roster, cover(found)).filter(h => !hasPerson(found, h));
   const stage2 = [...found, ...byRole];
 
   // 職稱旁邊如果已經寫了姓名，那個職稱是在描述那個人，不是另一個受獎人。
@@ -489,9 +532,15 @@ function matchAll(block, roster, history = null, era = null) {
   });
 
   const byTitle = matchByTitle(block, roster, cover(stage2), history, era)
-    .filter(h => !has(stage2, h) && !named(h));
+    .filter(h => !hasPerson(stage2, h) && !named(h));
 
-  return [...stage2, ...byTitle].sort((a, b) => a.pos - b.pos);
+  return [...stage2, ...byTitle]
+    .sort((a, b) => a.pos - b.pos)
+    .map(h => ({
+      ...h,
+      duty: detectDuty(block, h.pos, h.written) || '',
+      assignment: detectAssignment(block, h.pos) || '',
+    }));
 }
 
 
@@ -807,6 +856,30 @@ function draftReason(meta, block, opts = {}) {
     if (full.length > limit) full = full.slice(0, limit);
   }
   return full;
+}
+
+/** 將同案不同分工寫進事由，避免同一人的多筆資料完全相同。 */
+function applyDutyToReason(reason, duty) {
+  if (!duty) return reason;
+  const parts = String(reason || '').split('\n');
+  const main = parts.shift() || '';
+  const core = main.replace(/^(?:協助辦理|辦理|主辦|承辦|協辦|協助)/, '');
+  const verb = duty === '協助' ? '協助辦理' : duty;
+  return [`${verb}${core}`, ...parts].join('\n');
+}
+
+/**
+ * 將同一人的每次分工／負責範圍寫進事由，並維持 WebHR 的 100 字限制。
+ */
+function applyOccurrenceToReason(reason, duty, assignment, limit = 100) {
+  const parts = String(applyDutyToReason(reason, duty) || '').split('\n');
+  let main = parts.shift() || '';
+  if (assignment) main = `${assignment}${main}`;
+
+  const suffix = parts.length ? `\n${parts.join('\n')}` : '';
+  const room = Math.max(0, limit - suffix.length);
+  if (main.length > room) main = main.slice(0, room);
+  return main + suffix;
 }
 
 
