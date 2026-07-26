@@ -70,7 +70,7 @@ const CATEGORY_CODES = [
 
 const LAW = {
   edu: { code: 'CA', name: '公立高級中等以下學校教師成績考核辦法' },
-  civil: { code: 'BT', name: '高雄市政府及所屬各機關公務人員平時獎懲標準表' },
+  civil: { code: '', name: '' },
 };
 
 // 條 / 點 / 項 / 款 / 目。null 代表該欄不適用，輸出時填哨兵值。
@@ -80,11 +80,8 @@ const CLAUSE = {
     '4002': { 條: 6, 點: null, 項: 2, 款: 3, 目: 10 },
     '4010': { 條: 6, 點: null, 項: 2, 款: 2, 目: 9 },
   },
-  civil: {
-    '4001': { 條: null, 點: 3, 項: null, 款: null, 目: 5 },
-    '4002': { 條: null, 點: 3, 項: null, 款: null, 目: 5 },
-    '4010': { 條: null, 點: 4, 項: null, 款: null, 目: 7 },
-  },
+  // 公務人員法規欄位不自動推定，交由承辦人於 WebHR 確認。
+  civil: {},
 };
 
 // 哨兵值：沿用你既有 CSV 的慣例
@@ -833,7 +830,10 @@ function buildRow(person, awardCode, reason, category, orgCode, opts = {}) {
   const kind = person.kind;
   const law = LAW[kind];
   const cl = (CLAUSE[kind] && CLAUSE[kind][awardCode]) || { 條: null, 點: null, 項: null, 款: null, 目: null };
-  const v = (key) => (cl[key] === null || cl[key] === undefined ? SENTINEL[key] : cl[key]);
+  const v = (key) => {
+    if (kind === 'civil') return '';
+    return cl[key] === null || cl[key] === undefined ? SENTINEL[key] : cl[key];
+  };
 
   return {
     身分證號: person.id,

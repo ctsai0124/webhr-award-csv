@@ -500,7 +500,12 @@ function renderMore(row) {
 
   const grid = el('div', { class: 'more-grid' },
     el('label', {}, el('span', { text: '獎懲類別' }), catSel),
-    el('span', { class: 'law', text: `適用法規　${law.code}　${law.name}` }),
+    el('span', {
+      class: 'law',
+      text: kind === 'civil'
+        ? '適用法規　公務人員預設留空，請於 WebHR 確認'
+        : `適用法規　${law.code}　${law.name}`,
+    }),
     ...nums,
     ...(kind === 'edu' && (row.awardCode === '4001' || row.awardCode === '4002')
       ? [el('span', { class: 'law', text: '教師嘉獎預設：第6條第2項第3款第10目（無法細分時採第10目；「點」不適用）' })]
