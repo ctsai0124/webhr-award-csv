@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600&family=Noto+Serif+TC:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <div class="wrap">
@@ -76,10 +76,9 @@
   </details>
 
   <details class="settings-panel">
-    <summary><span>匯出設定</span><small>機關代碼、校長排除與檔案編碼</small></summary>
+    <summary><span>匯出設定</span><small>機關代碼、事由格式與檔案編碼</small></summary>
     <div class="settings">
       <label class="field-label"><span>機關代碼</span><input type="text" id="orgCode" value="397085000Y"></label>
-      <label class="check-label"><input type="checkbox" id="excludePrincipal" checked><span>排除校長<small>另由教育局核布獎令</small></span></label>
       <label class="check-label"><input type="checkbox" id="withBasis" checked><span>事由附依據函文</span></label>
       <label class="field-label"><span>檔案編碼</span>
         <select id="encoding">
@@ -130,6 +129,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="core.js"></script>
-<script src="ui.js"></script>
+<script src="ui.js?v=2"></script>
 </body>
 </html>

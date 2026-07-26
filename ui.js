@@ -7,7 +7,6 @@ const state = {
   signers: [],       // 批核軌跡抽出的職稱沿革原始紀錄
   history: null,
   orgCode: '397085000Y',
-  excludePrincipal: true,
   withBasis: true,
   encoding: 'big5',
 };
@@ -141,7 +140,6 @@ function analyzeDoc(doc) {
   const era = detectEra(meta.subject, meta.year);
 
   let hits = matchAll(block, state.roster, state.history, era);
-  if (state.excludePrincipal) hits = hits.filter(h => !h.person.isPrincipal);
 
   const awards = findAwards(block);
   let paired = pairNameAward(block, hits, awards);
@@ -517,11 +515,6 @@ window.addEventListener('DOMContentLoaded', () => {
   wireDrop('#docDrop', '.pdf', loadDocs);
 
   $('#orgCode').addEventListener('input', e => { state.orgCode = e.target.value.trim(); });
-  $('#excludePrincipal').addEventListener('change', e => {
-    state.excludePrincipal = e.target.checked;
-    reanalyzeDocs();
-    render();
-  });
   $('#withBasis').addEventListener('change', e => {
     state.withBasis = e.target.checked;
     reanalyzeDocs({ preserveReason: false });
