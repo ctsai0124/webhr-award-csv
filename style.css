@@ -138,6 +138,18 @@ header h1 {
   color: var(--vermil); background: var(--red-bg); font-weight: 600;
 }
 .upload-label.optional span { color: var(--indigo); background: var(--indigo-soft); }
+.source-guide {
+  margin-bottom: 10px; padding: 11px 12px; border: 1px solid #D7E2E9;
+  border-radius: 7px; background: var(--indigo-soft); font-size: 12px;
+}
+.source-title {
+  display: block; margin-bottom: 3px; color: var(--indigo);
+  font-size: 11px; font-weight: 600; letter-spacing: .05em;
+}
+.source-path { color: var(--ink); font-weight: 600; line-height: 1.55; }
+.source-path i { padding: 0 3px; color: #8A9AA6; font-style: normal; }
+.source-guide p { margin: 6px 0 0; color: var(--stone); line-height: 1.5; }
+.source-guide p strong { color: var(--vermil); margin-right: 3px; }
 
 /* ---------- 已載入摘要 ---------- */
 .loaded {
@@ -338,6 +350,7 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
   .step-head { display: block; }
   .local-note { display: inline-block; margin-top: 10px; }
   .grid2, .settings { grid-template-columns: 1fr; }
+  .source-path i { padding: 0 1px; }
   .settings-panel summary small, .optional-panel summary small { display: none; }
   .compact-drop { align-items: flex-start; flex-wrap: wrap; }
   .compact-drop .compact-copy { min-width: calc(100% - 50px); }
