@@ -99,9 +99,19 @@ async function loadDocs(files) {
   for (let i = 0; i < pdfs.length; i++) {
     say('#docMsg', `讀取中… ${i + 1} / ${pdfs.length}　${pdfs[i].name}`);
     try {
-      const text = await readPdfText(pdfs[i]);
-      state.docs.push({ key: keyOf(pdfs[i]), file: pdfs[i].name, text, rows: [] });
-      state.signers.push(...extractSigners(text));
+      const result = await readPdfText(pdfs[i], detail => {
+        say('#docMsg', `${i + 1} / ${pdfs.length}　${pdfs[i].name}　${detail}`);
+      });
+      state.docs.push({
+        key: keyOf(pdfs[i]),
+        file: pdfs[i].name,
+        text: result.text,
+        ocrUsed: result.ocrUsed,
+        ocrPages: result.ocrPages,
+        ocrConfidence: result.ocrConfidence,
+        rows: [],
+      });
+      state.signers.push(...extractSigners(result.text));
     } catch (err) {
       state.docs.push({
         key: keyOf(pdfs[i]), file: pdfs[i].name, text: '', meta: {}, block: '', rows: [],
@@ -118,19 +128,85 @@ async function loadDocs(files) {
   render();
 
   const n = state.docs.reduce((s, d) => s + d.rows.length, 0);
-  say('#docMsg', `已載入 ${state.docs.length} 份公文，解析出 ${n} 筆敘獎資料`);
+  const ocrCount = state.docs.filter(d => d.ocrUsed).length;
+  say('#docMsg',
+    `已載入 ${state.docs.length} 份公文，解析出 ${n} 筆敘獎資料` +
+    (ocrCount ? `；其中 ${ocrCount} 份使用瀏覽器 OCR，請逐筆核對` : ''));
   $('#step3').hidden = false;
   $('#step4').hidden = false;
 }
 
-async function readPdfText(file) {
+function hasUsablePdfText(text) {
+  const compact = (text || '').replace(/\s/g, '');
+  const han = ((text || '').match(/[\u3400-\u9FFF]/g) || []).length;
+  return compact.length >= 80 && (han >= 15 || compact.length >= 180);
+}
+
+async function readPdfText(file, onProgress = () => {}) {
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  let text = '';
+  const pages = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
-    text += itemsToText((await page.getTextContent()).items) + '\n';
+    pages.push({
+      page,
+      text: itemsToText((await page.getTextContent()).items),
+    });
   }
-  return text;
+
+  const nativeText = pages.map(p => p.text).join('\n');
+  if (hasUsablePdfText(nativeText)) {
+    return { text: nativeText, ocrUsed: false, ocrPages: [], ocrConfidence: null };
+  }
+
+  if (!window.Tesseract || typeof window.Tesseract.createWorker !== 'function') {
+    throw new Error('OCR 元件載入失敗，請確認網路連線後重新整理頁面');
+  }
+
+  let currentPage = 0;
+  const worker = await window.Tesseract.createWorker(['chi_tra', 'eng'], 1, {
+    logger: message => {
+      if (message.status === 'recognizing text') {
+        onProgress(`OCR 第 ${currentPage}/${pages.length} 頁　${Math.round(message.progress * 100)}%`);
+      } else if (message.status === 'loading language traineddata') {
+        onProgress('首次載入繁體中文 OCR 模型…');
+      }
+    },
+  });
+
+  const ocrTexts = [];
+  const confidences = [];
+  try {
+    for (let i = 0; i < pages.length; i++) {
+      currentPage = i + 1;
+      onProgress(`準備 OCR 第 ${currentPage}/${pages.length} 頁…`);
+      const base = pages[i].page.getViewport({ scale: 1 });
+      const scale = Math.min(2, 2800 / Math.max(base.width, base.height));
+      const viewport = pages[i].page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const context = canvas.getContext('2d', { alpha: false });
+      context.fillStyle = '#FFFFFF';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await pages[i].page.render({ canvasContext: context, viewport }).promise;
+      const result = await worker.recognize(canvas);
+      ocrTexts.push(result.data.text || '');
+      if (Number.isFinite(result.data.confidence)) confidences.push(result.data.confidence);
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  } finally {
+    await worker.terminate();
+  }
+
+  return {
+    text: ocrTexts.join('\n'),
+    ocrUsed: true,
+    ocrPages: pages.map((_, i) => i + 1),
+    ocrConfidence: confidences.length
+      ? Math.round(confidences.reduce((sum, value) => sum + value, 0) / confidences.length)
+      : null,
+  };
 }
 
 function analyzeDoc(doc) {
@@ -146,7 +222,17 @@ function analyzeDoc(doc) {
   const fb = findFallbackAward(text);
   if (fb) paired = paired.map(p => (p.award ? p : { ...p, award: fb }));
 
-  const assess = assessDoc(block, hits, awards);
+  let assess = assessDoc(block, hits, awards);
+  if (doc.ocrUsed) {
+    const confidence = doc.ocrConfidence === null ? '' : `，平均信心值 ${doc.ocrConfidence}%`;
+    const ocrNote =
+      `這份掃描公文使用瀏覽器 OCR（第 ${doc.ocrPages.join('、')} 頁${confidence}）。` +
+      '姓名、獎度與事由均須人工核對，不會預設核章。';
+    assess = {
+      level: assess.level === 'fail' ? 'fail' : 'warn',
+      note: assess.note ? `${ocrNote} ${assess.note}` : ocrNote,
+    };
+  }
   const reason = draftReason(meta, block, { withBasis: state.withBasis });
   const category = guessCategory(meta.subject + block);
 

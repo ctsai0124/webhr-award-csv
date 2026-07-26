@@ -150,6 +150,10 @@ header h1 {
 .source-path i { padding: 0 3px; color: #8A9AA6; font-style: normal; }
 .source-guide p { margin: 6px 0 0; color: var(--stone); line-height: 1.5; }
 .source-guide p strong { color: var(--vermil); margin-right: 3px; }
+.ocr-info {
+  margin-top: 8px; color: var(--stone); font-size: 11.5px; line-height: 1.55;
+}
+.ocr-info b { color: var(--indigo); font-weight: 600; }
 
 /* ---------- 已載入摘要 ---------- */
 .loaded {
