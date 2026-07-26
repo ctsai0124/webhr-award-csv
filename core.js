@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const APP_DATE = '2026-07-27';
 
 
@@ -934,13 +934,16 @@ function findFallbackAward(text) {
     .replace(/[敍叙]/g, '敘');
   let m = normalized.match(/(?:敘|核予|同意|各)[^。\n]{0,24}?(嘉獎?|記功)\s*([一二三１２1-3])\s*次/);
   // 評鑑公文常在擬辦只寫「本校成績為優等」，獎度另列於來文規則。
+  // 這種是照本校等第精準查到的，即使來文列了多種等第也不算不確定。
+  let precise = false;
+  let grade = '';
   if (!m) {
-    const grade = normalized.match(/成績為[：:]?(特優|優等|甲等)/);
-    if (grade) {
+    const g = normalized.match(/成績為[：:]?(特優|優等|甲等)/);
+    if (g) {
       const rule = normalized.match(
-        new RegExp(`${grade[1]}[：:]?[^。\\n]{0,50}?(嘉獎?|記功)\\s*([一二三１２1-3])\\s*次`),
+        new RegExp(`${g[1]}[：:]?[^。\\n]{0,50}?(嘉獎?|記功)\\s*([一二三１２1-3])\\s*次`),
       );
-      if (rule) m = rule;
+      if (rule) { m = rule; precise = true; grade = g[1]; }
     }
   }
   if (!m) return null;
@@ -952,7 +955,9 @@ function findFallbackAward(text) {
   for (const a of findAwards(normalized)) if (a.code) levels.add(a.code);
   return {
     pos: -1, code, label: `${kind}${n === 2 ? '二' : '一'}次`,
-    raw: m[0], fallback: true, sole: levels.size <= 1,
+    raw: m[0], fallback: true, precise, grade,
+    sole: levels.size <= 1,
+    levels: [...levels],
   };
 }
 
@@ -1110,7 +1115,9 @@ function pairNameAward(block, hits, awards, opts = {}) {
  */
 function assessDoc(block, hits, awards, fallback = null, paired = null) {
   const hasFallbackAward = fallback && typeof fallback === 'object' ? true : !!fallback;
-  const soleFallback = fallback && typeof fallback === 'object' ? fallback.sole !== false : false;
+  const soleFallback = fallback && typeof fallback === 'object'
+    ? (fallback.sole !== false || fallback.precise === true)
+    : false;
 
   if (!block) return { level: 'fail', blockAll: true, note: '找不到擬辦區塊，無法解析名單' };
   if (!hits.length) {
@@ -1123,9 +1130,20 @@ function assessDoc(block, hits, awards, fallback = null, paired = null) {
       return { level: 'fail', blockAll: true, note: '擬辦與來文全文都找不到明確獎度，請人工確認' };
     }
     // 全文只有一種獎度，套用給誰都一樣，不必逐筆確認
-    return soleFallback
-      ? { level: 'info', blockAll: false, note: '擬辦沒寫獎度，已採用來文本文的獎度（全文僅此一種）。' }
-      : { level: 'warn', blockAll: true, note: '擬辦沒寫獎度，來文有多種獎度，請確認每位適用哪一種。' };
+    if (soleFallback) {
+      const why = fallback && fallback.precise
+        ? `擬辦沒寫獎度，已依本校成績「${fallback.grade}」對到來文的獎度。`
+        : '擬辦沒寫獎度，已採用來文本文的獎度（全文僅此一種）。';
+      return { level: 'info', blockAll: false, note: why };
+    }
+    // 來文列了多種獎度又查不到本校適用哪一種，把選項講出來讓人比較好挑
+    const opts = (fallback && fallback.levels || [])
+      .map(c => Object.entries(AWARD_CODES).find(([, v]) => v === c))
+      .filter(Boolean).map(([label]) => label);
+    return {
+      level: 'warn', blockAll: true,
+      note: `擬辦沒寫獎度，來文有${opts.length ? `${opts.join('、')}` : '多種獎度'}，請確認每位適用哪一種。`,
+    };
   }
   if (paired) {
     const unmatched = paired.filter(item => !item.award).length;
