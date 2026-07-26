@@ -13,53 +13,87 @@
 <div class="wrap">
 
 <header>
-  <h1>敘獎 CSV 產製</h1>
-  <p>讀取敘獎公文，比對校內人員名冊，產出 WebHR 獎懲匯入用的 Big5 CSV。所有資料只留在這個瀏覽器分頁，不會上傳到任何地方。</p>
+  <div class="brand-row">
+    <div>
+      <span class="eyebrow">WebHR 獎懲作業輔助工具</span>
+      <h1>敘獎 CSV 產製</h1>
+    </div>
+    <div class="privacy"><span aria-hidden="true">●</span> 資料不離開瀏覽器</div>
+  </div>
+  <p class="lead">讀取教育局敘獎公文，比對校內人員名冊，產出 WebHR 可匯入的 CSV。</p>
+  <ol class="flow" aria-label="操作流程">
+    <li class="active"><span>1</span><b>人員資料</b><small>載入校內名冊</small></li>
+    <li><span>2</span><b>敘獎公文</b><small>可一次上傳多份</small></li>
+    <li><span>3</span><b>逐筆核對</b><small>確認姓名與獎度</small></li>
+    <li><span>4</span><b>匯出 CSV</b><small>帶回 WebHR 匯入</small></li>
+  </ol>
 </header>
 
 <!-- 1 -->
 <section class="step">
-  <h2><span class="n">1</span>人員資料</h2>
-  <p class="hint">人事系統的人員基本資料表，提供身分證號與職稱。名冊上沒有的人不會被敘獎。</p>
-  <div class="grid2">
+  <div class="step-head">
     <div>
+      <span class="step-kicker">STEP 1</span>
+      <h2>先載入人員資料</h2>
+      <p class="hint">系統以名冊為準比對身分證號與職稱；名冊上沒有的人不會出現在結果裡。</p>
+    </div>
+    <span class="local-note">檔案只在這個分頁中處理</span>
+  </div>
+  <div class="grid2">
+    <div class="upload-card required">
+      <div class="upload-label"><span>必要</span> 先上傳這份</div>
       <div class="drop" id="rosterDrop" tabindex="0" role="button">
+        <span class="drop-icon" aria-hidden="true">人</span>
         <strong>人員基本資料表</strong>
-        <span>CPAB1207R　.xls / .xlsx　必要</span>
+        <span>CPAB1207R · .xls / .xlsx</span>
+        <em>選擇檔案</em>
         <input type="file">
       </div>
       <div class="loaded" id="rosterMsg" hidden></div>
     </div>
-    <div>
+    <div class="upload-card">
+      <div class="upload-label optional"><span>選用</span> 提供相似事由建議</div>
       <div class="drop" id="corpusDrop" tabindex="0" role="button">
+        <span class="drop-icon" aria-hidden="true">例</span>
         <strong>歷年獎懲明細表</strong>
-        <span>CPAB1209R　.xls / .xlsx　選用</span>
+        <span>CPAB1209R · .xls / .xlsx</span>
+        <em>選擇檔案</em>
         <input type="file">
       </div>
       <div class="loaded" id="corpusMsg" hidden></div>
     </div>
   </div>
 
-  <div class="settings">
-    <label>機關代碼<input type="text" id="orgCode" value="397085000Y"></label>
-    <label><input type="checkbox" id="excludePrincipal" checked>排除校長（另由教育局核布獎令）</label>
-    <label><input type="checkbox" id="withBasis" checked>事由附「依據○○函辦理」</label>
-    <label>編碼
-      <select id="encoding">
-        <option value="big5">Big5</option>
-        <option value="utf8">UTF-8 (BOM)</option>
-      </select>
-    </label>
-  </div>
+  <details class="settings-panel">
+    <summary><span>匯出設定</span><small>機關代碼、校長排除與檔案編碼</small></summary>
+    <div class="settings">
+      <label class="field-label"><span>機關代碼</span><input type="text" id="orgCode" value="397085000Y"></label>
+      <label class="check-label"><input type="checkbox" id="excludePrincipal" checked><span>排除校長<small>另由教育局核布獎令</small></span></label>
+      <label class="check-label"><input type="checkbox" id="withBasis" checked><span>事由附依據函文</span></label>
+      <label class="field-label"><span>檔案編碼</span>
+        <select id="encoding">
+          <option value="big5">Big5（WebHR 建議）</option>
+          <option value="utf8">UTF-8 (BOM)</option>
+        </select>
+      </label>
+    </div>
+  </details>
 </section>
 
 <!-- 2 -->
 <section class="step" id="step2" hidden>
-  <h2><span class="n">2</span>敘獎公文</h2>
-  <p class="hint">可一次選多份。只會讀取「擬辦」段落找名單，批核軌跡裡的簽核人不會被誤認成受獎人。</p>
+  <div class="step-head">
+    <div>
+      <span class="step-kicker">STEP 2</span>
+      <h2>上傳敘獎公文</h2>
+      <p class="hint">可一次選多份。只讀取「擬辦」段落，批核軌跡裡的簽核人不會被當成受獎人。</p>
+    </div>
+  </div>
   <div class="drop" id="docDrop" tabindex="0" role="button">
+    <span class="drop-icon pdf" aria-hidden="true">PDF</span>
     <strong>公文 PDF</strong>
-    <span>可多選，或直接把檔案拖進來</span>
+    <span>一次選取所有公文，歷任職稱比對會更準確</span>
+    <em>選擇多份 PDF</em>
     <input type="file" multiple>
   </div>
   <div class="loaded" id="docMsg" hidden></div>
@@ -68,19 +102,26 @@
 
 <!-- 3 -->
 <section class="step" id="step3" hidden>
-  <h2><span class="n">3</span>核對</h2>
-  <p class="hint">確認無誤的按左側「核」蓋章，只有蓋章的資料會寫進 CSV。姓名、獎度、事由都可以直接改。</p>
+  <div class="step-head">
+    <div>
+      <span class="step-kicker">STEP 3</span>
+      <h2>逐筆核對</h2>
+      <p class="hint">姓名、獎度與事由都能直接修改。確認無誤後按左側「核」，只有蓋章的資料會寫進 CSV。</p>
+    </div>
+  </div>
   <div id="docs"></div>
 </section>
 
 <!-- 4 -->
 <section class="step" id="step4" hidden>
-  <h2><span class="n">4</span>匯出</h2>
+  <div class="export-title">
+    <div><span class="step-kicker">STEP 4</span><h2>匯出 WebHR CSV</h2></div>
+    <span class="summary" id="summary">尚未核章任何資料</span>
+  </div>
   <div class="actions">
     <button class="primary" id="exportBtn" disabled>匯出 Big5 CSV</button>
     <button class="ghost" id="sealAll">全部核章 / 取消</button>
     <button class="ghost" id="clearBtn">清空公文</button>
-    <span class="summary" id="summary">尚未核章任何資料</span>
   </div>
   <div class="warnbox" id="warn" hidden></div>
 </section>
