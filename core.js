@@ -1,7 +1,10 @@
 /* ===========================================================
-   敘獎 CSV 產製工具 — 核心邏輯
-   純前端，無後端。所有資料留在瀏覽器記憶體。
+   敘獎 CSV 產製工具
    =========================================================== */
+
+const APP_VERSION = '1.5.0';
+const APP_DATE = '2026-07-27';
+
 
 /* -----------------------------------------------------------
    1. Big5 編碼器
@@ -654,8 +657,10 @@ function matchByTitle(block, roster, taken = new Set(), history = null, era = nu
       // 例：公文寫「教導主任」，名冊職稱是「教師兼教務主任」但單位是「教導處」，
       //     用單位就能和總務主任區分開來。
       if (!cands.length) {
-        cands = roster.filter(p =>
-          hasRole(p) && keys.some(k => p.title.includes(k) || p.unit.includes(k)));
+        cands = roster.filter(p => hasRole(p) && keys.some(k => p.title.includes(k)));
+        if (!cands.length) {
+          cands = roster.filter(p => hasRole(p) && keys.some(k => p.unit.includes(k)));
+        }
         if (cands.length) { written = qualifier + role; tier = 'unit'; }
       }
     }
@@ -808,17 +813,18 @@ function matchByRole(block, roster, taken = new Set()) {
     const roleKeys = ROLE_ALIAS[role] || [role];
     const unitKeys = unit ? (UNIT_ALIAS[unit] || [unit]) : null;
 
-    let cands = roster.filter(p => {
-      if (p.name[0] !== surname) return false;
-      if (!roleKeys.some(k => p.title.includes(k))) return false;
-      if (unitKeys && !unitKeys.some(k => p.title.includes(k) || p.unit.includes(k))) return false;
-      return true;
-    });
+    let cands = roster.filter(p =>
+      p.name[0] === surname && roleKeys.some(k => p.title.includes(k)));
 
-    // 加了單位反而找不到人，就放寬成只看姓和職稱
-    if (!cands.length && unitKeys) {
-      cands = roster.filter(p =>
-        p.name[0] === surname && roleKeys.some(k => p.title.includes(k)));
+    // 單位要分層比。職稱寫明單位（教師兼教務處教務主任）比單位欄位精確，
+    // 混在一起比會讓「幼稚園主任但單位掛在教務處」的人也符合「教務林主任」。
+    if (unitKeys && cands.length > 1) {
+      const byTitle = cands.filter(p => unitKeys.some(k => p.title.includes(k)));
+      if (byTitle.length) cands = byTitle;
+      else {
+        const byUnit = cands.filter(p => unitKeys.some(k => p.unit.includes(k)));
+        if (byUnit.length) cands = byUnit;
+      }
     }
     if (!cands.length) continue;
 
@@ -899,7 +905,13 @@ function findFallbackAward(text) {
   const kind = m[1].startsWith('嘉') ? '嘉獎' : '記功';
   const n = CN_NUM[m[2]] ?? 1;
   const code = kind === '嘉獎' ? (n === 2 ? '4002' : '4001') : (n === 1 ? '4010' : null);
-  return { pos: -1, code, label: `${kind}${n === 2 ? '二' : '一'}次`, raw: m[0], fallback: true };
+  // 全文只出現一種獎度時，套用給誰都不會錯；出現多種才有選錯的風險。
+  const levels = new Set();
+  for (const a of findAwards(normalized)) if (a.code) levels.add(a.code);
+  return {
+    pos: -1, code, label: `${kind}${n === 2 ? '二' : '一'}次`,
+    raw: m[0], fallback: true, sole: levels.size <= 1,
+  };
 }
 
 /**
@@ -1049,49 +1061,61 @@ function pairNameAward(block, hits, awards, opts = {}) {
  * 姓名數和獎度數對不起來，通常表示 PDF 的表格排版在抽文字時被打亂了，
  * 這種情況配對結果不可信，要整份標記人工核對。
  */
-function assessDoc(block, hits, awards, hasFallbackAward = false, paired = null) {
-  if (!block) return { level: 'fail', note: '找不到擬辦區塊，無法解析名單' };
+/**
+ * blockAll 表示問題會動搖整份公文的配對可信度，所有列都不自動核章。
+ * 沒標的警告只是在描述個別列的狀況 —— 那些列本身就過不了自動核章的門檻，
+ * 不需要把同一份公文裡其他已經確定的人一起扣住。
+ */
+function assessDoc(block, hits, awards, fallback = null, paired = null) {
+  const hasFallbackAward = fallback && typeof fallback === 'object' ? true : !!fallback;
+  const soleFallback = fallback && typeof fallback === 'object' ? fallback.sole !== false : false;
+
+  if (!block) return { level: 'fail', blockAll: true, note: '找不到擬辦區塊，無法解析名單' };
   if (!hits.length) {
     return /主任|組長|導師|護理師|校長/.test(block)
-      ? { level: 'fail', note: '擬辦只寫職稱沒有姓名，需自行指定人員' }
-      : { level: 'fail', note: '擬辦區塊中找不到名冊上的人員' };
+      ? { level: 'fail', blockAll: true, note: '擬辦只寫職稱沒有姓名，需自行指定人員' }
+      : { level: 'fail', blockAll: true, note: '擬辦區塊中找不到名冊上的人員' };
   }
   if (!awards.length) {
-    return hasFallbackAward
-      ? { level: 'warn', note: '擬辦沒寫獎度，已改用來文本文的獎度' }
-      : { level: 'fail', note: '擬辦與來文全文都找不到明確獎度，請人工確認' };
+    if (!hasFallbackAward) {
+      return { level: 'fail', blockAll: true, note: '擬辦與來文全文都找不到明確獎度，請人工確認' };
+    }
+    // 全文只有一種獎度，套用給誰都一樣，不必逐筆確認
+    return soleFallback
+      ? { level: 'info', blockAll: false, note: '擬辦沒寫獎度，已採用來文本文的獎度（全文僅此一種）。' }
+      : { level: 'warn', blockAll: true, note: '擬辦沒寫獎度，來文有多種獎度，請確認每位適用哪一種。' };
   }
   if (paired) {
     const unmatched = paired.filter(item => !item.award).length;
     if (unmatched) {
       return {
-        level: 'warn',
+        level: 'warn', blockAll: true,
         note: `有 ${unmatched} 位人員未能配到獎度，請查看原公文後人工指定`,
       };
     }
   }
   const shared = awards.some(a => a.shared || a.heading || a.group);
   if (awards.length && !shared && hits.length !== awards.length) {
-    return { level: 'warn', note: `找到 ${hits.length} 位人員但 ${awards.length} 個獎度，配對可能錯位，請逐筆核對` };
+    return { level: 'warn', blockAll: true, note: `找到 ${hits.length} 位人員但 ${awards.length} 個獎度，配對可能錯位，請逐筆核對` };
   }
   // 真的需要你做決定的，是「名冊上有兩個以上的人都符合」。
   // 離職者不在名冊上就不列入，他曾任什麼職務也不構成問題，不必為此發警告。
   const pickNeeded = hits.filter(h => h.confidence === 'ambiguous').length;
   if (pickNeeded) {
-    return { level: 'warn', note:
+    return { level: 'warn', blockAll: false, note:
       `有 ${pickNeeded} 個職稱在名冊上不只一人符合，請點選正確的人員。` };
   }
   const byTitle = hits.filter(h => h.confidence === 'title').length;
   if (byTitle) {
-    return { level: 'warn', note: `有 ${byTitle} 位公文只寫職稱，職稱沒完全對上，請確認人員。` };
+    return { level: 'warn', blockAll: false, note: `有 ${byTitle} 位公文只寫職稱，職稱沒完全對上，請確認人員。` };
   }
   // 姓＋職稱＋單位三個條件都吻合且名冊上唯一，確定性足夠，
   // 只說明比對依據，不要求人工確認。
   const byRole = hits.filter(h => h.confidence === 'role').length;
   if (byRole) {
-    return { level: 'info', note: `有 ${byRole} 位公文寫的是「單位＋姓＋職稱」，已對回名冊人員。` };
+    return { level: 'info', blockAll: false, note: `有 ${byRole} 位公文寫的是「單位＋姓＋職稱」，已對回名冊人員。` };
   }
-  return { level: 'ok', note: '' };
+  return { level: 'ok', blockAll: false, note: '' };
 }
 
 

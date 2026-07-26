@@ -116,6 +116,7 @@
     <div><span class="step-kicker">STEP 4</span><h2>匯出 WebHR CSV</h2></div>
     <span class="summary" id="summary">尚未核章任何資料</span>
   </div>
+  <div class="tally" id="tally" hidden></div>
   <div class="actions">
     <button class="primary" id="exportBtn" disabled>匯出 Big5 CSV</button>
     <button class="ghost" id="sealAll">全部核章 / 取消</button>
@@ -128,6 +129,12 @@
   匯出後到 WebHR：<code>獎懲作業 › 一般獎懲 › 獎懲案件維護作業</code>，
   建立令(稿)後進入<code>明細</code>，選定人員方式，再用<code>匯入 CSV</code>。<br>
   同一人不可有兩筆獎懲類別、獎懲事由、核定日期完全相同的資料，匯入前請留意。
+  <div class="foot-meta">
+    <span id="version"></span>
+    <span class="visits" id="visits" hidden></span>
+    <span class="lifetime" id="lifetime"></span>
+    <button type="button" class="link-btn" id="resetLifetime" hidden>歸零</button>
+  </div>
 </div>
 
 </div>

@@ -1,5 +1,32 @@
 /* 敘獎 CSV 產製工具 — 介面邏輯 */
 
+/* ---------- 到訪計數（選用） ----------
+   這是整個工具唯一會對外發出的請求，內容只有一個固定的計數 key，
+   不含任何人事資料、檔名或解析結果。人事資料一律留在瀏覽器。
+   把 VISIT_KEY 設成空字串，就完全不會發出任何外部請求。
+   服務：Abacus（https://abacus.jasoncameron.dev），免註冊、計數器不公開列出。 */
+const VISIT_NAMESPACE = 'ctsai0124.github.io';
+const VISIT_KEY = 'webhr-award-csv';
+
+async function countVisit() {
+  if (!VISIT_KEY) return;
+  const box = $('#visits');
+  try {
+    const res = await fetch(
+      `https://abacus.jasoncameron.dev/hit/${VISIT_NAMESPACE}/${VISIT_KEY}`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    if (typeof data.value !== 'number') return;
+    box.textContent = `到訪 ${data.value.toLocaleString('zh-TW')} 次`;
+    box.hidden = false;
+  } catch {
+    // 服務掛掉、被防火牆擋、離線使用都可能失敗。
+    // 計數本來就不是必要功能，靜靜略過就好。
+  }
+}
+
 const state = {
   roster: [],
   corpus: [],
@@ -312,15 +339,17 @@ function analyzeDoc(doc) {
   let assess = approvalUsed
     ? {
         level: 'info',
+        blockAll: false,
         note: '擬辦未列受獎人，姓名與獎度取自批核意見。',
       }
-    : assessDoc(block, hits, awards, !!fb, paired);
+    : assessDoc(block, hits, awards, fb, paired);
   if (meta.subjectCount > 1 || meta.proposalCount > 1) {
     const sectionNote =
       `PDF 內含 ${meta.subjectCount} 組主旨、${meta.proposalCount} 組擬辦，` +
       '已依檔名選擇最相近案件，請確認主旨與名單。';
     assess = {
       level: assess.level === 'fail' ? 'fail' : 'warn',
+      blockAll: true,   // 案件可能挑錯，整份都要人工看過
       note: assess.note ? `${sectionNote} ${assess.note}` : sectionNote,
     };
   }
@@ -360,6 +389,7 @@ function analyzeDoc(doc) {
       '姓名、獎度與事由均須人工核對，不會預設核章。';
     assess = {
       level: assess.level === 'fail' ? 'fail' : 'warn',
+      blockAll: true,   // OCR 辨識結果不保證正確
       note: assess.note ? `${ocrNote} ${assess.note}` : ocrNote,
     };
   }
@@ -418,12 +448,12 @@ function analyzeDoc(doc) {
       '請自行補上區別後再核章。';
     assess = {
       level: assess.level === 'fail' ? 'fail' : 'warn',
+      blockAll: !!assess.blockAll,   // 只擋事由撞在一起的那幾位
       note: assess.note ? `${assess.note} ${note}` : note,
     };
   }
   for (const row of built) {
-    const docOk = assess.level === 'ok' || assess.level === 'info';
-    row.include = row._auto && docOk && !stillSame.includes(row.person.name);
+    row.include = row._auto && !assess.blockAll && !stillSame.includes(row.person.name);
     delete row._auto;
   }
 
@@ -505,7 +535,62 @@ function refreshSummary() {
       `有 ${over.length} 筆事由超過 100 字上限（${over.map(r => r.person.name).join('、')}），` +
       `WebHR 會拒絕匯入，請先縮短。`;
   }
+  renderTally(on);
   refreshFlow(on.length);
+}
+
+/** 本次核章的獎度分布，匯入 WebHR 前可以先對一次額度 */
+function renderTally(rows) {
+  const box = $('#tally');
+  box.hidden = !rows.length;
+  box.replaceChildren();
+  if (!rows.length) return;
+
+  const count = new Map();
+  for (const r of rows) count.set(r.awardCode, (count.get(r.awardCode) || 0) + 1);
+
+  for (const [label, code] of Object.entries(AWARD_CODES)) {
+    const n = count.get(code) || 0;
+    if (!n) continue;
+    box.append(el('div', { class: 'tally-item' },
+      el('span', { class: 'tally-label', text: label }),
+      el('span', { class: 'tally-num', text: String(n) }),
+      el('span', { class: 'tally-label', text: '筆' })));
+  }
+  const docs = state.docs.filter(d => d.rows.some(r => r.include)).length;
+  box.append(el('div', { class: 'tally-item' },
+    el('span', { class: 'tally-label', text: '來自公文' }),
+    el('span', { class: 'tally-num', text: String(docs) }),
+    el('span', { class: 'tally-label', text: '份' })));
+}
+
+/* ---------- 累計統計 ----------
+   只存在這台電腦的瀏覽器裡，不會外傳。記錄總筆數與公文份數，
+   讓你知道這個工具實際幫忙處理掉多少件。 */
+const LIFETIME_KEY = 'webhr-award-lifetime';
+
+function readLifetime() {
+  try {
+    const raw = localStorage.getItem(LIFETIME_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return v && typeof v === 'object' ? { rows: v.rows | 0, docs: v.docs | 0, runs: v.runs | 0 } : null;
+  } catch { return null; }
+}
+
+function bumpLifetime(rows, docs) {
+  const cur = readLifetime() || { rows: 0, docs: 0, runs: 0 };
+  const next = { rows: cur.rows + rows, docs: cur.docs + docs, runs: cur.runs + 1 };
+  try { localStorage.setItem(LIFETIME_KEY, JSON.stringify(next)); } catch { /* 無痕模式會擋，忽略 */ }
+  renderLifetime();
+}
+
+function renderLifetime() {
+  const v = readLifetime();
+  const box = $('#lifetime');
+  const btn = $('#resetLifetime');
+  if (!v || !v.rows) { box.textContent = ''; btn.hidden = true; return; }
+  box.textContent = `累計匯出 ${v.rows} 筆・${v.docs} 份公文・${v.runs} 次`;
+  btn.hidden = false;
 }
 
 function allRows() {
@@ -936,6 +1021,7 @@ function exportCsv() {
   const url = URL.createObjectURL(blob);
   const a = el('a', { href: url, download: `CPAA0118B_${stamp()}.csv` });
   document.body.append(a); a.click(); a.remove();
+  bumpLifetime(rows.length, state.docs.filter(d => d.rows.some(r => r.include)).length);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
@@ -968,6 +1054,15 @@ function stamp() {
 window.addEventListener('DOMContentLoaded', () => {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     new URL('pdf.worker.min.js', window.location.href).href;
+
+  $('#version').textContent = `v${APP_VERSION}　${APP_DATE}`;
+  countVisit();
+  renderLifetime();
+  $('#resetLifetime').addEventListener('click', () => {
+    if (!confirm('要把累計數字歸零嗎？這不會影響已經匯出的檔案。')) return;
+    try { localStorage.removeItem(LIFETIME_KEY); } catch { /* 忽略 */ }
+    renderLifetime();
+  });
 
   wireDrop('#rosterDrop', '.xls,.xlsx', loadRoster);
   wireDrop('#corpusDrop', '.xls,.xlsx', loadCorpus);
