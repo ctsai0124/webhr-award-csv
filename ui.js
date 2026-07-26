@@ -260,13 +260,27 @@ function suggestedReviewPages(doc, meta, block, hits, awards) {
   return [...pages].sort((a, b) => a - b).slice(0, 6);
 }
 
+/**
+ * 哪些比對結果可以自動核章。
+ * 除了完全相符，還有兩種可確定的情形不必再勞煩人工：
+ *   唯一對得上的筆誤（江雨薇 → 江宇薇，名冊上只有一個人差一字）
+ *   批核軌跡明寫「承辦」的「本人」
+ */
+function autoSeal(p) {
+  if (p.confidence === 'exact') return true;
+  if (p.confidence === 'typo' && p.unique !== false) return true;
+  if (p.confidence === 'self' && p.selfCertain) return true;
+  return false;
+}
+
 function analyzeDoc(doc) {
   const text = doc.text;
   const meta = parseDocMeta(text, doc.file);
   const block = extractProposal(text, doc.file);
   const era = detectEra(meta.subject, meta.year);
 
-  let hits = matchAll(block, state.roster, state.history, era);
+  const submitter = findSubmitter(text);
+  let hits = matchAll(block, state.roster, state.history, era, submitter);
 
   let awards = findAwards(block);
   let paired = pairNameAward(block, hits, awards);
@@ -356,12 +370,17 @@ function analyzeDoc(doc) {
   const category = guessCategory(meta.subject + block);
 
   Object.assign(doc, {
-    meta, block, assess, era,
+    meta, block, assess, era, submitter,
+    baseReason: reason,
+    baseCategory: category,
     rows: paired.map(p => ({
-      include: p.confidence === 'exact' && !!p.award && assess.level === 'ok',
+      include: autoSeal(p) && !!p.award && assess.level === 'ok',
       person: p.person,
       written: p.written,
       confidence: p.confidence,
+      unique: p.unique !== false,
+      selfCertain: !!p.selfCertain,
+      selfTitle: p.selfTitle || '',
       candidates: p.candidates || null,
       tenure: p.tenure || null,
       duty: p.duty || '',
@@ -389,7 +408,10 @@ function reanalyzeDocs(opts = {}) {
       row.occurrenceKey || `${row.person.id}@${row.sourcePos ?? ''}`,
       row,
     ]));
+    // 手動新增的列不是解析出來的，重跑後要原樣接回去
+    const manual = (doc.rows || []).filter(row => row.manual);
     analyzeDoc(doc);
+    if (manual.length) doc.rows.push(...manual);
     if (!preserve) continue;
     for (const row of doc.rows) {
       const prior = old.get(row.occurrenceKey);
@@ -481,9 +503,18 @@ function renderDoc(doc) {
   const body = el('div', { class: 'doc-body' });
   if (!doc.rows.length) {
     body.append(el('div', { class: 'fields', style: 'padding:14px 18px;color:#6B6E68;font-size:13.5px' },
-      el('span', { text: '這份公文沒有解析出可用的名單，請改用 WebHR 手動建檔。' })));
+      el('span', { text: '這份公文沒有解析出名單。可以用下面的「新增一筆」自行指定人員。' })));
   }
   for (const row of doc.rows) body.append(renderRow(row));
+
+  // 解析不出來或漏抓時，讓使用者自己補一筆
+  body.append(el('div', { class: 'add-row' },
+    el('button', {
+      type: 'button', class: 'ghost add-btn', text: '＋ 新增一筆',
+      onclick: () => { addRow(doc); },
+    }),
+    el('span', { class: 'add-hint', text: '從名冊挑人，適用於系統沒抓到或抓錯人的情形' }),
+  ));
 
   return el('div', { class: 'doc' }, head, body);
 }
@@ -491,11 +522,41 @@ function renderDoc(doc) {
 const CONF_LABEL = {
   exact:     ['ok',    '姓名相符'],
   typo:      ['typo',  '疑似錯字'],
+  typoSure:  ['ok',    '錯字已更正'],
+  manual:    ['check', '手動新增'],
+  self:      ['ok',    '本人＝承辦人'],
+  selfGuess: ['check', '本人待確認'],
   partial:   ['check', '需確認'],
   role:      ['typo',  '職稱推定'],
   title:     ['typo',  '職稱對應'],
   ambiguous: ['check', '多人符合'],
 };
+
+/** 手動補一筆敘獎資料。預設不核章，人員與獎度都要自己挑。 */
+function addRow(doc) {
+  if (!state.roster.length) return;
+  const person = state.roster[0];
+  doc.rows.push({
+    include: false,
+    person,
+    written: '',
+    confidence: 'manual',
+    unique: true,
+    selfCertain: false,
+    selfTitle: '',
+    candidates: null,
+    tenure: null,
+    duty: '',
+    assignment: '',
+    sourcePos: Number.MAX_SAFE_INTEGER,
+    occurrenceKey: `manual@${Date.now()}`,
+    awardCode: '',
+    reason: doc.baseReason || '',
+    category: doc.baseCategory || 'A02',
+    manual: true,
+  });
+  render();
+}
 
 function renderRow(row) {
   const wrap = el('div', { class: 'row' + (row.include ? '' : ' off') });
@@ -514,7 +575,10 @@ function renderRow(row) {
   const f = el('div', { class: 'fields' });
 
   // 第一行：狀態、姓名、身分證號、職稱、獎懲結果
-  const [cls, label] = CONF_LABEL[row.confidence] || CONF_LABEL.exact;
+  let key = row.confidence;
+  if (key === 'typo' && row.unique !== false) key = 'typoSure';
+  if (key === 'self' && !row.selfCertain) key = 'selfGuess';
+  const [cls, label] = CONF_LABEL[key] || CONF_LABEL.exact;
   const line1 = el('div', { class: 'line1' },
     el('span', { class: 'badge ' + cls, text: label }),
     personSelect(row),
@@ -529,6 +593,25 @@ function renderRow(row) {
     const names = row.candidates.map(c =>
       c.name + (row.tenure && row.tenure[c.id] ? `（${row.tenure[c.id]}）` : ''));
     line1.append(el('span', { class: 'written', text: `符合的有 ${names.join('、')}，請確認` }));
+  }
+  if (row.manual) {
+    line1.append(el('button', {
+      type: 'button', class: 'link-btn',
+      text: '移除這筆',
+      onclick: () => {
+        const doc = state.docs.find(d => d.rows.includes(row));
+        if (doc) { doc.rows = doc.rows.filter(r => r !== row); render(); }
+      },
+    }));
+  }
+  if (row.confidence === 'self') {
+    line1.append(el('span', { class: 'written',
+      text: row.selfCertain
+        ? `公文寫「${row.written}」，批核軌跡的承辦人是${row.selfTitle} ${row.person.name}`
+        : `公文寫「${row.written}」，軌跡沒明寫承辦人，這是依第 1 筆簽核推的` }));
+  }
+  if (row.confidence === 'typo' && row.unique !== false) {
+    line1.append(el('span', { class: 'written', text: `公文誤寫「${row.written}」，已更正` }));
   }
   if (row.confidence === 'title') {
     line1.append(el('span', { class: 'written', text: '依現職職稱對應' }));

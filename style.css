@@ -371,3 +371,19 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
   .reason { display: block; }
   .count { display: block; margin-left: auto; padding-top: 2px; }
 }
+
+/* ---------- 手動新增一筆 ---------- */
+.add-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 18px; border-top: 1px dashed var(--hair); background: #FCFCFB;
+}
+.add-btn { font-size: 13px; padding: 5px 14px; }
+.add-hint { font-size: 12.5px; color: var(--stone); }
+
+.link-btn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: var(--sans); font-size: 12.5px; color: var(--vermil);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.link-btn:hover { color: #A82D24; }
+.link-btn:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }

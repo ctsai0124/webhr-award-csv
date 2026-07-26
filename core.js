@@ -70,7 +70,7 @@ const CATEGORY_CODES = [
 
 const LAW = {
   edu: { code: 'CA', name: '公立高級中等以下學校教師成績考核辦法' },
-  civil: { code: '', name: '' },
+  civil: { code: 'BT', name: '高雄市政府及所屬各機關公務人員平時獎懲標準表' },
 };
 
 // 條 / 點 / 項 / 款 / 目。null 代表該欄不適用，輸出時填哨兵值。
@@ -80,7 +80,8 @@ const CLAUSE = {
     '4002': { 條: 6, 點: null, 項: 2, 款: 3, 目: 10 },
     '4010': { 條: 6, 點: null, 項: 2, 款: 2, 目: 9 },
   },
-  // 公務人員法規欄位不自動推定，交由承辦人於 WebHR 確認。
+  // 公務人員不自動推定條點項款目，一律輸出哨兵值交由承辦人於 WebHR 調整。
+  // 但「適用法規名稱」必填，留空 WebHR 會拒絕匯入。
   civil: {},
 };
 
@@ -427,12 +428,19 @@ function matchNames(block, roster) {
   const hits = [];
   const seen = new Set();
 
-  const push = (person, pos, written, confidence) => {
+  const push = (person, pos, written, confidence, unique = true) => {
     const key = person.id + '@' + pos;
     if (seen.has(key)) return;
     seen.add(key);
-    hits.push({ person, pos, written, confidence });
+    hits.push({ person, pos, written, confidence, unique });
   };
+
+  // 一個錯寫的姓名，名冊上只有一個人對得起來才算「可確定的筆誤」。
+  // 兩個人都差一字就不能自動放行，要人工挑。
+  const soleTypoMatch = (written) => roster.filter(p =>
+    p.name.length === written.length &&
+    p.name[0] === written[0] &&
+    [...written].filter((c, k) => c !== p.name[k]).length === 1).length === 1;
 
   for (let i = 0; i < block.length; i++) {
     for (const p of roster) {
@@ -446,7 +454,7 @@ function matchNames(block, roster) {
           let diff = 0;
           for (let k = 0; k < n.length; k++) if (w[k] !== n[k]) diff++;
           if (diff === 1 && w[0] === n[0] && /^[\u4e00-\u9fa5]+$/.test(w)) {
-            push(p, i, w, 'typo');
+            push(p, i, w, 'typo', soleTypoMatch(w));
           }
         }
       }
@@ -487,7 +495,8 @@ function matchNames(block, roster) {
         const after = block.slice(i + written.length, i + written.length + 4);
         if (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||
             /^(?:記功|嘉獎|[、，,])/.test(after)) {
-          push(p, i, written, 'typo');
+          // 前面已檢查 uniqueGiven 且排除其他人同名，這裡的對應是唯一的
+          push(p, i, written, 'typo', true);
         }
       }
     }
@@ -541,6 +550,60 @@ function mergeSigners(all) {
 }
 
 const fmtRoc = (n) => `${Math.floor(n / 10000)}/${String(Math.floor(n / 100) % 100).padStart(2, '0')}`;
+
+
+/* -----------------------------------------------------------
+   6e. 「本人」代稱
+   擬辦有人會寫「本人擬敘嘉獎1次」，本人指的就是承辦人。
+   承辦人在批核軌跡上標得很清楚，可以直接對回名冊。
+   ----------------------------------------------------------- */
+
+const SIGNER_TAIL =
+  '(?:小學|中學|國中|國小|學校|幼兒園)([\\u4e00-\\u9fa5]{2,8}?)[ \\u3000]+([\\u4e00-\\u9fa5]{2,4})[ \\u3000]*[（(：:]';
+
+/**
+ * 找出承辦人。兩種批核軌跡格式標的位置不一樣：
+ *   「意見及流程」—— 行首直接標 承辦，後面接機關全名和姓名
+ *   「批核軌跡及意見」—— 編號式，簽核人的「下一行」才標 承辦意見
+ * 兩種都是公文明寫的，不是猜的。
+ */
+function findSubmitter(text) {
+  let m = text.match(new RegExp(`(?:^|\\n)[ \\u3000]*承辦[ \\u3000][^\\n]{0,60}?${SIGNER_TAIL}`));
+  if (m) return { title: m[1], name: m[2], certain: true };
+
+  m = text.match(new RegExp(`${SIGNER_TAIL}[^\\n]*\\n[ \\u3000]*承辦意見`));
+  if (m) return { title: m[1], name: m[2], certain: true };
+
+  // 都找不到才退回「軌跡第 1 筆通常是承辦人」，這種要人工確認
+  const idx = text.search(/批核軌跡|意見及流程/);
+  if (idx >= 0) {
+    m = text.slice(idx).match(new RegExp(`(?:^|\\n)[ \\u3000]*1[ \\u3000]*[.、][^\\n]*?${SIGNER_TAIL}`));
+    if (m) return { title: m[1], name: m[2], certain: false };
+  }
+  return null;
+}
+
+/** 把擬辦裡的「本人」對應到承辦人 */
+function matchSelfReference(block, roster, submitter) {
+  if (!submitter) return [];
+  const person = roster.find(p => p.name === submitter.name);
+  if (!person) return [];
+
+  const hits = [];
+  const re = /本人|本席/g;
+  let m;
+  while ((m = re.exec(block)) !== null) {
+    hits.push({
+      person,
+      pos: m.index,
+      written: m[0],
+      confidence: 'self',
+      selfCertain: !!submitter.certain,
+      selfTitle: submitter.title,
+    });
+  }
+  return hits;
+}
 
 
 /* -----------------------------------------------------------
@@ -636,7 +699,7 @@ function detectEra(subject, docYear) {
 }
 
 /** 完整比對跑完後，依序用姓+職稱、純職稱補沒抓到的人 */
-function matchAll(block, roster, history = null, era = null) {
+function matchAll(block, roster, history = null, era = null, submitter = null) {
   const found = matchNames(block, roster);
   const cover = (list) => {
     const s = new Set();
@@ -661,7 +724,12 @@ function matchAll(block, roster, history = null, era = null) {
   const byTitle = matchByTitle(block, roster, cover(stage2), history, era)
     .filter(h => !hasPerson(stage2, h) && !named(h));
 
-  return [...stage2, ...byTitle]
+  // 「本人」指的是承辦人。已經有明確姓名的位置就不用再解一次。
+  const stage3 = [...stage2, ...byTitle];
+  const bySelf = matchSelfReference(block, roster, submitter)
+    .filter(h => !hasPerson(stage3, h));
+
+  return [...stage3, ...bySelf]
     .sort((a, b) => a.pos - b.pos)
     .map(h => ({
       ...h,
@@ -1099,10 +1167,7 @@ function buildRow(person, awardCode, reason, category, orgCode, opts = {}) {
   const kind = person.kind;
   const law = LAW[kind];
   const cl = (CLAUSE[kind] && CLAUSE[kind][awardCode]) || { 條: null, 點: null, 項: null, 款: null, 目: null };
-  const v = (key) => {
-    if (kind === 'civil') return '';
-    return cl[key] === null || cl[key] === undefined ? SENTINEL[key] : cl[key];
-  };
+  const v = (key) => (cl[key] === null || cl[key] === undefined ? SENTINEL[key] : cl[key]);
 
   return {
     身分證號: person.id,
