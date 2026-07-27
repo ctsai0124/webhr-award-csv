@@ -83,6 +83,15 @@ async function loadRoster(files) {
   try {
     const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
     state.roster = parseRoster(wb);
+
+    // 名冊表頭有學校名稱，直接查出機關代碼，不用使用者自己記
+    const school = state.roster.school || '';
+    const code = school ? lookupSchoolCode(school) : '';
+    if (code && code !== state.orgCode) {
+      state.orgCode = code;
+      $('#orgCode').value = code;
+    }
+    state.schoolName = school;
     const edu = state.roster.filter(p => p.kind === 'edu').length;
     const sub = state.roster.filter(p => p.isSubstitute).length;
     say('#rosterMsg',
@@ -607,9 +616,11 @@ function analyzeDoc(doc) {
   if (doc.ocrUsed) {
     const confidence = doc.ocrConfidence === null ? '' : `，平均信心值 ${doc.ocrConfidence}%`;
     const engine = doc.ocrEngine === 'mac' ? 'Mac 端 Vision' : '瀏覽器內建';
+    const fromFile = doc.meta && doc.meta.subjectFromFile
+      ? '主旨辨識結果不完整，已改用檔名，事由請再確認。' : '';
     const ocrNote =
       `這份掃描公文使用${engine} OCR（第 ${doc.ocrPages.join('、')} 頁${confidence}）。` +
-      '姓名、獎度與事由均須人工核對，不會預設核章。';
+      '姓名、獎度與事由均須人工核對，不會預設核章。' + (fromFile ? ' ' + fromFile : '');
     assess = {
       level: assess.level === 'fail' ? 'fail' : 'warn',
       blockAll: true,   // OCR 辨識結果不保證正確

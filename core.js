@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -136,6 +136,14 @@ function parseRoster(workbook) {
   }
   if (hdrIdx < 0) throw new Error('找不到標題列。請確認上傳的是 CPAB1207R 人員基本資料表。');
 
+  // 標題列之前通常是學校名稱，抓來當機關代碼的對照依據
+  let school = '';
+  for (let i = 0; i < hdrIdx; i++) {
+    const line = rows[i].map(c => String(c).trim()).filter(Boolean).join('');
+    const m = line.match(/([\u4e00-\u9fa5]{2,20}?(?:國民小學|國民中學|國小|國中|高級中學|高中|高工|高商|幼兒園|實驗學校|學校))/);
+    if (m) { school = m[1]; break; }
+  }
+
   const hdr = rows[hdrIdx].map(c => String(c).trim());
   const col = name => hdr.indexOf(name);
   const cName = col('姓名'), cId = col('身分證號'), cTitle = col('職稱');
@@ -158,6 +166,7 @@ function parseRoster(workbook) {
     });
   }
   if (!people.length) throw new Error('沒有讀到任何人員資料，請確認檔案內容。');
+  people.school = school;
   return people;
 }
 
@@ -315,6 +324,34 @@ function nearestMatch(matches, pos) {
 }
 
 /** 抽公文表頭欄位；PDF 內若有多案，以檔名最接近的主旨為準。 */
+/**
+ * 判斷這段文字是不是可讀的中文主旨。
+ * OCR 失敗時的典型症狀是冒出大量連續的拉丁字母，中文比例掉下來。
+ */
+function looksReadable(s) {
+  const t = String(s || '');
+  if (t.length < 8) return false;
+  const han = (t.match(/[\u4e00-\u9fa5]/g) || []).length;
+  if (han / t.length < 0.6) return false;
+  // 連續 6 個以上的大寫拉丁字母，正常公文不會出現
+  if (/[A-Za-z]{6,}/.test(t)) return false;
+  return true;
+}
+
+/** 從檔名還原主旨。檔名開頭常有案件編號，要去掉 */
+function subjectFromFilename(filename) {
+  if (!filename) return '';
+  let s = String(filename).replace(/\.[a-z0-9]+$/i, '');
+
+  // 只砍「編號＋分隔符」的組合（43-47-、04-06-、12_），
+  // 不能無差別砍開頭數字，否則「113學年度…」的年度會被吃掉
+  s = s.replace(/^\d+(?:[-–~]\d+)*\s*[-–_.、]\s*/, '')
+       .replace(/[_]+/g, '')
+       .replace(/(?<=[\u4e00-\u9fa5」』）)])\d{1,2}$/, '')   // 結尾流水號，前面要是中文
+       .trim();
+  return s.length >= 8 && looksReadable(s) ? s : '';
+}
+
 function parseDocMeta(text, filename = '') {
   const flat = text.replace(/[ \t]+/g, '');
   const mSub = selectSubjectMatch(text, filename);
@@ -353,6 +390,15 @@ function parseDocMeta(text, filename = '') {
   let subject = '';
   if (mSub) subject = mSub[1].replace(/\s+/g, '').replace(/[。．]+$/, '');
 
+  // OCR 把主旨讀壞時（大量拉丁亂碼、中文比例過低），改用檔名。
+  // 檔名是承辦人自己打的，通常完整正確；但公文內容仍優先，只在明顯壞掉時才換。
+  let subjectFromFile = false;
+  const fromName = subjectFromFilename(filename);
+  if (fromName && (!subject || !looksReadable(subject))) {
+    subject = fromName;
+    subjectFromFile = true;
+  }
+
   // 說明段：主旨講的是「這份公文要幹嘛」，說明才寫「同仁做了什麼」
   let body = '';
   const bodySource = mSub ? text.slice(mSub.index + mSub[0].length) : text;
@@ -366,6 +412,7 @@ function parseDocMeta(text, filename = '') {
     day: mDate ? mDate[3] : '',
     docNo: mNo ? mNo[1] : '',
     subject,
+    subjectFromFile,
     body,
     subjectCount: subjectMatches(text).length,
     proposalCount: proposalMatches(text).length,
