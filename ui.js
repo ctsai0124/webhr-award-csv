@@ -27,6 +27,8 @@ async function countVisit() {
   }
 }
 
+let MEM = null;
+
 const state = {
   roster: [],
   corpus: [],
@@ -135,6 +137,7 @@ async function loadDocs(files) {
         text: result.text,
         pageTexts: result.pageTexts,
         ocrUsed: result.ocrUsed,
+        ocrEngine: result.ocrEngine || null,
         ocrPages: result.ocrPages,
         ocrConfidence: result.ocrConfidence,
         rows: [],
@@ -184,6 +187,198 @@ function normalizeOcrText(text) {
     .replace(/[ \t]+/g, ' ');
 }
 
+/* ---------- Mac OCR（選用） ----------
+   把 PDF 送到自己架的中繼服務，由 Mac 上的 Vision framework 辨識。
+   比瀏覽器內的 Tesseract 準得多，而且回傳帶座標的 token，
+   表格式公文能照版面還原。
+
+   會離開瀏覽器的只有 PDF 本身，辨識結果的解析仍在本機做。
+   設定存在 localStorage，沒設定就完全不會用到這條路。 */
+const MAC_OCR_KEY = 'webhr-award-mac-ocr';
+
+function avgConfidence(tokens) {
+  const vals = tokens.map(t => t.conf).filter(v => typeof v === 'number');
+  if (!vals.length) return null;
+  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100);
+}
+
+function macOcrConfig() {
+  try {
+    const v = JSON.parse(localStorage.getItem(MAC_OCR_KEY) || 'null');
+    return v && v.server ? v : null;
+  } catch { return null; }
+}
+
+function saveMacOcrConfig(cfg) {
+  try {
+    if (cfg) localStorage.setItem(MAC_OCR_KEY, JSON.stringify(cfg));
+    else localStorage.removeItem(MAC_OCR_KEY);
+  } catch { /* 無痕模式會擋，忽略 */ }
+  renderMacOcr();
+}
+
+async function macOcrRequest(path, opts = {}) {
+  const cfg = macOcrConfig();
+  const headers = { ...(opts.headers || {}) };
+  if (cfg.key) headers['X-OCR-KEY'] = cfg.key;
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(cfg.server.replace(/\/$/, '') + path, { ...opts, headers });
+  if (!res.ok) throw new Error(`伺服器回應 ${res.status}`);
+  return res.json();
+}
+
+/** 送出 PDF、等 Mac 辨識完成，回傳帶座標的 token */
+async function macOcr(file, onProgress = () => {}) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  }
+
+  onProgress('上傳到 Mac 辨識…');
+  const { job_id: jobId } = await macOcrRequest('/jobs', {
+    method: 'POST',
+    body: JSON.stringify({ pdf_b64: btoa(bin) }),
+  });
+  if (!jobId) throw new Error('伺服器沒有建立工作');
+
+  const deadline = Date.now() + 5 * 60 * 1000;
+  let waited = 0;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 2000));
+    waited += 2;
+    const st = await macOcrRequest(`/jobs/${jobId}`);
+    if (st.status === 'done') return st.tokens || [];
+    if (st.status === 'failed') throw new Error(st.error || 'Mac 端辨識失敗');
+    onProgress(st.status === 'pending'
+      ? `等待 Mac 端領取…（${waited} 秒，請確認 worker 有在執行）`
+      : `Mac 辨識中…（${waited} 秒）`);
+  }
+  throw new Error('等待逾時，請確認 Mac 上的 worker 是否正在執行');
+}
+
+/** 設定面板：顯示目前狀態 */
+function renderMacOcr() {
+  const cfg = macOcrConfig();
+  const msg = $('#macOcrMsg');
+  $('#macOcrClear').hidden = !cfg;
+  if (cfg) {
+    $('#macOcrServer').value = cfg.server;
+    $('#macOcrKey').value = cfg.key || '';
+    msg.hidden = false;
+    msg.className = 'loaded';
+    msg.innerHTML = `已設定：<b>${cfg.server}</b>　掃描件會優先送到這裡辨識`;
+  } else {
+    msg.hidden = true;
+  }
+}
+
+/* ---------- 記憶面板 ---------- */
+function renderMemory() {
+  const msg = $('#memMsg');
+  if (!MEM) { msg.hidden = false; msg.className = 'loaded'; msg.textContent = '記憶已停用'; return; }
+  const n = memoryCount(MEM);
+  msg.hidden = false;
+  msg.className = 'loaded';
+  msg.innerHTML = n
+    ? `已記住 <b>${n}</b> 筆修正（職稱 ${Object.keys(MEM.titles).length}、`
+      + `姓名 ${Object.keys(MEM.names).length}、事由 ${Object.keys(MEM.scopes).length}）`
+    : '還沒有記住任何修正。手動改過人員之後就會記下來。';
+}
+
+function wireMemory() {
+  MEM = loadMemory();
+  renderMemory();
+
+  $('#memEnabled').addEventListener('change', e => {
+    MEM = e.target.checked ? loadMemory() : null;
+    renderMemory();
+    if (state.docs.length) reanalyzeDocs(true);
+  });
+
+  $('#memExport').addEventListener('click', () => {
+    if (!MEM) return;
+    const blob = new Blob([exportMemory(MEM)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: `敘獎記憶_${stamp()}.json` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  $('#memImport').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const msg = $('#memMsg');
+    try {
+      if (!MEM) MEM = loadMemory();
+      const added = importMemory(MEM, await file.text());
+      renderMemory();
+      msg.className = 'loaded';
+      msg.innerHTML += `<br>已從檔案合併 <b>${added}</b> 筆`;
+      if (state.docs.length) reanalyzeDocs(true);
+    } catch (err) {
+      msg.hidden = false; msg.className = 'loaded err';
+      msg.textContent = err.message;
+    }
+  });
+
+  $('#memClear').addEventListener('click', () => {
+    if (!confirm('要清除所有記住的修正嗎？這不影響已經核章的資料。')) return;
+    try { localStorage.removeItem(MEMORY_KEY); } catch { /* 忽略 */ }
+    MEM = loadMemory();
+    renderMemory();
+    if (state.docs.length) reanalyzeDocs(true);
+  });
+}
+
+function wireMacOcr() {
+  renderMacOcr();
+
+  $('#macOcrSave').addEventListener('click', () => {
+    const server = $('#macOcrServer').value.trim();
+    const key = $('#macOcrKey').value.trim();
+    const msg = $('#macOcrMsg');
+    if (!server) { saveMacOcrConfig(null); return; }
+    if (!/^https?:\/\//.test(server)) {
+      msg.hidden = false; msg.className = 'loaded err';
+      msg.textContent = '網址要以 http:// 或 https:// 開頭';
+      return;
+    }
+    // GitHub Pages 是 https，瀏覽器會擋掉對 http 的請求
+    if (window.location.protocol === 'https:' && server.startsWith('http://')) {
+      msg.hidden = false; msg.className = 'loaded err';
+      msg.textContent = '這個網頁是 https，瀏覽器會擋掉 http 的請求，服務網址請改用 https';
+      return;
+    }
+    saveMacOcrConfig({ server, key });
+  });
+
+  $('#macOcrClear').addEventListener('click', () => {
+    $('#macOcrServer').value = '';
+    $('#macOcrKey').value = '';
+    saveMacOcrConfig(null);
+  });
+
+  $('#macOcrTest').addEventListener('click', async () => {
+    const msg = $('#macOcrMsg');
+    const server = $('#macOcrServer').value.trim();
+    if (!server) return;
+    msg.hidden = false; msg.className = 'loaded'; msg.textContent = '連線中…';
+    try {
+      const res = await fetch(server.replace(/\/$/, '') + '/health');
+      if (!res.ok) throw new Error(`回應 ${res.status}`);
+      const d = await res.json();
+      msg.className = 'loaded';
+      msg.innerHTML = `連線正常。佇列中 <b>${d.pending ?? 0}</b> 件、辨識中 <b>${d.processing ?? 0}</b> 件。` +
+        '<br>這只確認服務有回應，還要 Mac 上的 worker 有在執行才會真的辨識。';
+    } catch (err) {
+      msg.className = 'loaded err';
+      msg.textContent = `連不上：${err.message}。請確認網址正確、服務已啟動。`;
+    }
+  });
+}
+
 async function readPdfText(file, onProgress = () => {}) {
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   const pages = [];
@@ -201,9 +396,31 @@ async function readPdfText(file, onProgress = () => {}) {
       text: nativeText,
       pageTexts: pages.map(p => p.text),
       ocrUsed: false,
+      ocrEngine: null,
       ocrPages: [],
       ocrConfidence: null,
     };
+  }
+
+  // 設定過 Mac OCR 就優先用，辨識品質好得多
+  if (macOcrConfig()) {
+    try {
+      const tokens = await macOcr(file, onProgress);
+      if (tokens.length) {
+        return {
+          text: tokensToText(tokens),
+          pageTexts: [],
+          ocrUsed: true,
+          ocrEngine: 'mac',
+          ocrPages: [...new Set(tokens.map(t => t.page ?? 0))].map(n => n + 1),
+          ocrConfidence: avgConfidence(tokens),
+        };
+      }
+      onProgress('Mac 沒有辨識到文字，改用瀏覽器 OCR…');
+    } catch (err) {
+      // Mac 那邊沒開、網路不通都可能失敗，退回瀏覽器 OCR 仍可運作
+      onProgress(`Mac OCR 失敗（${err.message}），改用瀏覽器 OCR…`);
+    }
   }
 
   if (!window.Tesseract || typeof window.Tesseract.createWorker !== 'function') {
@@ -254,6 +471,7 @@ async function readPdfText(file, onProgress = () => {}) {
     text: ocrTexts.join('\n'),
     pageTexts: ocrTexts,
     ocrUsed: true,
+    ocrEngine: 'tesseract',
     ocrPages: pages.map((_, i) => i + 1),
     ocrConfidence: confidences.length
       ? Math.round(confidences.reduce((sum, value) => sum + value, 0) / confidences.length)
@@ -295,6 +513,8 @@ function suggestedReviewPages(doc, meta, block, hits, awards) {
  */
 function autoSeal(p) {
   if (p.confidence === 'exact') return true;
+  // 這個對應你自己確認過，不用再問一次
+  if (p.fromMemory) return true;
   // 弱比對（只寫名又錯一個字）不自動放行，實際只吻合一個字
   if (p.confidence === 'typo' && p.unique !== false && !p.weak) return true;
   // 只寫名沒寫姓，但名冊上唯一對得上
@@ -319,6 +539,8 @@ function analyzeDoc(doc) {
 
   const submitter = findSubmitter(text);
   let hits = matchAll(block, state.roster, state.history, era, submitter);
+  // 用這台電腦記住的修正校正解析結果，只在系統不確定時介入
+  if (MEM) applyMemory(MEM, hits, state.roster);
 
   let awards = findAwards(block);
   let paired = pairNameAward(block, hits, awards);
@@ -384,8 +606,9 @@ function analyzeDoc(doc) {
   }
   if (doc.ocrUsed) {
     const confidence = doc.ocrConfidence === null ? '' : `，平均信心值 ${doc.ocrConfidence}%`;
+    const engine = doc.ocrEngine === 'mac' ? 'Mac 端 Vision' : '瀏覽器內建';
     const ocrNote =
-      `這份掃描公文使用瀏覽器 OCR（第 ${doc.ocrPages.join('、')} 頁${confidence}）。` +
+      `這份掃描公文使用${engine} OCR（第 ${doc.ocrPages.join('、')} 頁${confidence}）。` +
       '姓名、獎度與事由均須人工核對，不會預設核章。';
     assess = {
       level: assess.level === 'fail' ? 'fail' : 'warn',
@@ -815,6 +1038,7 @@ function renderRow(row) {
         onclick: () => {
           row.person = c;
           row.picked = true;
+          if (MEM && row.written) rememberPerson(MEM, row.written, c);
           render();
         },
       },
@@ -858,6 +1082,9 @@ function renderRow(row) {
     line1.append(el('span', { class: 'written',
       text: row.titleHandover ? '名冊職稱完全相符，但這個職務交接過，請確認是哪一任'
                               : '名冊職稱完全相符' }));
+  }
+  if (row.memoryLabel) {
+    line1.append(el('span', { class: 'from-memory', text: row.memoryLabel }));
   }
   if (row.confidence === 'title') {
     line1.append(el('span', { class: 'written',
@@ -904,6 +1131,8 @@ function personSelect(row) {
     'aria-label': '對應人員',
     onchange: e => {
       row.person = state.roster.find(p => p.id === e.target.value);
+      if (MEM && row.written && row.person) rememberPerson(MEM, row.written, row.person);
+      row.picked = true;
       row.confidence = 'exact';
       render();
     },
@@ -1089,6 +1318,8 @@ window.addEventListener('DOMContentLoaded', () => {
     renderLifetime();
   });
 
+  wireMemory();
+  wireMacOcr();
   wireDrop('#rosterDrop', '.xls,.xlsx', loadRoster);
   wireDrop('#corpusDrop', '.xls,.xlsx', loadCorpus);
   wireDrop('#docDrop', '.pdf', loadDocs);

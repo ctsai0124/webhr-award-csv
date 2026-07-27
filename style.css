@@ -480,3 +480,30 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 .doc-seal.on { border-color: var(--hair); color: var(--stone); font-weight: 400; }
 .doc-seal.on:hover { background: #fff; border-color: var(--vermil); color: var(--vermil); }
 .doc-seal:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+
+/* ---------- Mac OCR 設定 ---------- */
+.field-row {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px;
+}
+.field-row label {
+  display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--stone);
+}
+.field-row input {
+  font-family: var(--mono); font-size: 13px; padding: 6px 9px; min-width: 240px;
+  border: 1px solid var(--hair); border-radius: 2px; background: #fff;
+}
+.field-row input:focus-visible { outline: 2px solid var(--indigo); outline-offset: 1px; }
+.field-row button { align-self: flex-end; }
+
+/* ---------- 記憶 ---------- */
+.from-memory {
+  font-size: 12.5px; color: var(--indigo);
+  border-bottom: 1px dotted var(--indigo); padding-bottom: 1px;
+}
+.file-label {
+  display: inline-flex; align-items: center; cursor: pointer;
+  font-family: var(--sans); font-size: 14px; padding: 9px 20px;
+  border: 1px solid var(--hair); border-radius: 2px; background: #fff; color: var(--ink);
+}
+.file-label:hover { border-color: var(--indigo); color: var(--indigo); }
+.file-label:focus-within { outline: 2px solid var(--indigo); outline-offset: 2px; }

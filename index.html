@@ -94,6 +94,47 @@
       </label>
     </div>
   </details>
+
+  <details class="panel">
+    <summary><span>選用：Mac 端 OCR</span><small>掃描件改用自己電腦辨識，比瀏覽器內建準確</small></summary>
+    <div class="panel-body">
+      <p class="hint">
+        設定後，遇到沒有文字層的掃描件時會把 PDF 送到你自己架的服務，
+        由 Mac 上的 Vision 辨識再回傳。連不上時會自動退回瀏覽器 OCR，不影響使用。
+        <b>只有 PDF 本身會離開瀏覽器，姓名與身分證號一律留在本機解析。</b>
+      </p>
+      <div class="field-row">
+        <label>服務網址
+          <input type="url" id="macOcrServer" placeholder="https://你的服務.zeabur.app" autocomplete="off">
+        </label>
+        <label>網頁金鑰
+          <input type="password" id="macOcrKey" placeholder="WEB_KEY" autocomplete="off">
+        </label>
+        <button type="button" class="ghost" id="macOcrSave">儲存</button>
+        <button type="button" class="ghost" id="macOcrTest">測試連線</button>
+        <button type="button" class="link-btn" id="macOcrClear" hidden>清除設定</button>
+      </div>
+      <div class="loaded" id="macOcrMsg" hidden></div>
+    </div>
+  </details>
+
+  <details class="panel">
+    <summary><span>選用：本機記憶</span><small>記住你做過的修正，下次自動套用</small></summary>
+    <div class="panel-body">
+      <p class="hint">
+        當你手動改掉系統判斷的人員時，這台電腦會記下來，下次遇到同樣寫法直接套用並自動核章。
+        例如把「教導主任」指定成某人、把公文寫錯的姓名對到正確的人。
+        <b>這些含姓名的記憶只存在本機，不會上傳。</b>換電腦請用匯出匯入。
+      </p>
+      <div class="field-row">
+        <label class="check-label"><input type="checkbox" id="memEnabled" checked><span>啟用記憶</span></label>
+        <button type="button" class="ghost" id="memExport">匯出記憶檔</button>
+        <label class="ghost file-label">匯入記憶檔<input type="file" id="memImport" accept=".json" hidden></label>
+        <button type="button" class="link-btn" id="memClear">全部清除</button>
+      </div>
+      <div class="loaded" id="memMsg" hidden></div>
+    </div>
+  </details>
 </section>
 
 <div class="hist history-global" id="history" hidden></div>
@@ -142,7 +183,8 @@
 <script src="xlsx.full.min.js"></script>
 <script src="pdf.min.js"></script>
   <script src="tesseract.min.js"></script>
-  <script src="core.js?v=8"></script>
-  <script src="ui.js?v=13"></script>
+  <script src="core.js?v=9"></script>
+  <script src="memory.js?v=1"></script>
+  <script src="ui.js?v=14"></script>
 </body>
 </html>

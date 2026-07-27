@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.8.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -213,6 +213,52 @@ function parseCorpus(workbook) {
    ----------------------------------------------------------- */
 
 /** 從 pdf.js 的 textContent 還原成帶換行的純文字 */
+/**
+ * 把 Mac 端 Vision OCR 回傳的 token 還原成文字。
+ *
+ * token 帶 x/y 座標，所以能照實際版面排序 —— 這正是 pdf.js 抽表格時
+ * 會弄丟的資訊。同一列的字由左至右接起來，列與列之間換行。
+ *
+ * y 是正規化過的（0 在頂端 1 在底端），同列容差取 0.008，
+ * 約等於一行文字高度的一半。
+ */
+function tokensToText(tokens, opts = {}) {
+  const rowTol = opts.rowTol ?? 0.008;
+  const byPage = new Map();
+  for (const t of tokens || []) {
+    if (!t || typeof t.text !== 'string') continue;
+    const p = t.page ?? 0;
+    if (!byPage.has(p)) byPage.set(p, []);
+    byPage.get(p).push(t);
+  }
+
+  const pages = [];
+  for (const page of [...byPage.keys()].sort((a, b) => a - b)) {
+    const items = byPage.get(page).slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    const rows = [];
+    for (const it of items) {
+      const row = rows[rows.length - 1];
+      if (row && Math.abs(it.y - row.y) <= rowTol) {
+        row.items.push(it);
+        // 用平均值當基準，長列才不會因為第一個字的位置偏掉而愈飄愈遠
+        row.y = (row.y * (row.items.length - 1) + it.y) / row.items.length;
+      } else {
+        rows.push({ y: it.y, items: [it] });
+      }
+    }
+    pages.push(rows.map(r =>
+      r.items.sort((a, b) => a.x - b.x).map(i => i.text).join('')).join('\n'));
+  }
+  return pages.join('\n');
+}
+
+/** 只在同一列的 token 之間插入分隔符，供表格解析辨識欄位邊界 */
+function tokensToRows(tokens) {
+  const text = tokensToText(tokens);
+  return text ? text.split('\n') : [];
+}
+
+
 function itemsToText(items) {
   let out = '', lastY = null;
   for (const it of items) {
