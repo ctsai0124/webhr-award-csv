@@ -507,3 +507,10 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 }
 .file-label:hover { border-color: var(--indigo); color: var(--indigo); }
 .file-label:focus-within { outline: 2px solid var(--indigo); outline-offset: 2px; }
+
+/* ---------- 「目」選單 ---------- */
+.item-label { flex: 1 1 100%; }
+.item-sel {
+  max-width: 100%; font-size: 12.5px; padding: 3px 6px;
+  border: 1px solid var(--hair); border-radius: 2px; background: #fff;
+}

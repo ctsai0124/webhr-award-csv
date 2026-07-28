@@ -665,6 +665,7 @@ function analyzeDoc(doc) {
     sourcePos: p.pos,
     occurrenceKey: `${p.person.id}@${p.pos}`,
     awardCode: p.award ? p.award.code : '',
+    item: null,
     reason: applyOccurrenceToReason(
       reason,
       p.duty,
@@ -719,6 +720,7 @@ function reanalyzeDocs(opts = {}) {
       if (!prior) continue;
       row.include = prior.include;
       if (prior.picked) { row.person = prior.person; row.picked = true; }
+      if (prior.item) row.item = prior.item;
       row.awardCode = prior.awardCode;
       row.category = prior.category;
       if (preserveReason) row.reason = prior.reason;
@@ -1194,9 +1196,39 @@ function renderMore(row) {
     catSel.append(o);
   }
 
-  const nums = ['條', '點', '項', '款', '目'].map(k =>
+  // 「目」是實務上最常需要換的欄位，做成選單；其餘唯讀。
+  const items = kind === 'edu' ? (EDU_ITEMS[row.awardCode] || []) : [];
+  const nums = ['條', '點', '項', '款'].map(k =>
     el('label', {}, el('span', { text: k }),
       el('input', { type: 'text', class: 'num', value: String(v(k)), readonly: true })));
+
+  if (items.length) {
+    const cur = row.item || v('目');
+    const sel = el('select', {
+      class: 'item-sel',
+      'aria-label': '適用之目',
+      onchange: e => { row.item = Number(e.target.value) || null; },
+    });
+    // 概括款目（嘉獎第10目、記功第9目）實務上最常用，排在最前面，
+    // 其餘照法條順序。這樣不用捲到底就看得到目前選的是哪個。
+    const common = Number(v('目'));
+    const ordered = [
+      ...items.filter(([n]) => n === common),
+      ...items.filter(([n]) => n !== common),
+    ];
+    for (const [n, text] of ordered) {
+      const o = el('option', {
+        value: String(n),
+        text: `第${n}目　${text}` + (n === common ? '（常用）' : ''),
+      });
+      if (String(n) === String(cur)) o.selected = true;
+      sel.append(o);
+    }
+    nums.push(el('label', { class: 'item-label' }, el('span', { text: '目' }), sel));
+  } else {
+    nums.push(el('label', {}, el('span', { text: '目' }),
+      el('input', { type: 'text', class: 'num', value: String(v('目')), readonly: true })));
+  }
 
   const grid = el('div', { class: 'more-grid' },
     el('label', {}, el('span', { text: '獎懲類別' }), catSel),
@@ -1253,6 +1285,96 @@ function similarReasons(reason, corpus, n) {
 }
 
 /* ---------- 匯出 ---------- */
+/* ---------- 未敘獎清單 ---------- */
+
+/**
+ * 產生「這次沒敘到獎的人」清單，分兩區塊：
+ *   一、系統有解析出但沒核章的 —— 附上公文與原因，方便回頭確認是不是漏了
+ *   二、名冊上完全沒被任何公文敘到的人
+ *
+ * 這是給人看的核對用清單，不是要匯入 WebHR，所以欄位以可讀性為主。
+ */
+const SKIP_HEADER = ['類別', '姓名', '職稱', '單位', '公文主旨', '公文檔號', '解析狀態', '獎度', '備註'];
+
+const CONF_TEXT = {
+  exact: '姓名相符', typo: '疑似錯字', partial: '省略姓氏',
+  role: '姓＋職稱', title: '職稱對應', titleExact: '職稱相符',
+  ambiguous: '多人符合', self: '本人＝承辦人', approval: '取自批核意見',
+  manual: '手動新增',
+};
+
+function buildSkipRows() {
+  const out = [];
+  const awardedIds = new Set();
+
+  for (const doc of state.docs) {
+    const m = doc.meta || {};
+    const docNo = m.docNo || '';
+    const subject = m.subject || doc.file || '';
+    for (const row of doc.rows || []) {
+      if (row.include) { awardedIds.add(row.person.id); continue; }
+      let note = '';
+      if (!row.awardCode) note = '未配到獎度';
+      else if (row.confidence === 'ambiguous') note = '名冊上多人符合，需人工挑選';
+      else if (row.weak) note = '比對強度不足，可能是名冊外的人';
+      else if (doc.assess && doc.assess.blockAll) note = doc.assess.note || '整份需人工核對';
+      else note = '未核章';
+
+      out.push({
+        類別: '一、解析出但未核章',
+        姓名: row.person.name,
+        職稱: row.person.title,
+        單位: row.person.unit,
+        公文主旨: subject,
+        公文檔號: docNo,
+        解析狀態: CONF_TEXT[row.confidence] || row.confidence,
+        獎度: row.awardCode
+          ? (Object.entries(AWARD_CODES).find(([, v]) => v === row.awardCode) || [''])[0]
+          : '',
+        備註: note,
+      });
+    }
+  }
+
+  // 第二區塊：名冊上完全沒出現在任何公文的人
+  const appeared = new Set(allRows().map(r => r.person.id));
+  for (const p of state.roster) {
+    if (appeared.has(p.id)) continue;
+    out.push({
+      類別: '二、本次完全未敘獎',
+      姓名: p.name, 職稱: p.title, 單位: p.unit,
+      公文主旨: '', 公文檔號: '', 解析狀態: '', 獎度: '',
+      備註: p.isPrincipal ? '校長（依規定由教育局統一辦理）' : '',
+    });
+  }
+  return out;
+}
+
+function exportSkipped() {
+  const rows = buildSkipRows();
+  if (!rows.length) {
+    alert('沒有未敘獎的人員。');
+    return;
+  }
+
+  const esc = v => {
+    const t = String(v ?? '').replace(/[\r\n]+/g, ' ');
+    return /[",]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const lines = [SKIP_HEADER.join(',')];
+  for (const r of rows) lines.push(SKIP_HEADER.map(h => esc(r[h])).join(','));
+  const csv = lines.join('\r\n') + '\r\n';
+
+  // 這份是給人用 Excel 開的，不是匯入 WebHR，
+  // 一律用 UTF-8 BOM 才不會有 Big5 缺字問題
+  const bytes = new Uint8Array([0xEF, 0xBB, 0xBF, ...new TextEncoder().encode(csv)]);
+  const blob = new Blob([bytes], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: `未敘獎清單_${stamp()}.csv` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function exportCsv() {
   const selected = allRows().filter(r => r.include);
   const missingAward = selected.filter(r => !r.awardCode);
@@ -1267,7 +1389,8 @@ function exportCsv() {
   }
 
   const rows = selected.filter(r => r.awardCode)
-    .map(r => buildRow(r.person, r.awardCode, r.reason, r.category, state.orgCode));
+    .map(r => buildRow(r.person, r.awardCode, r.reason, r.category, state.orgCode,
+      r.item ? { item: r.item } : {}));
 
   if (!rows.length) return;
 
@@ -1344,6 +1467,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('#encoding').addEventListener('change', e => { state.encoding = e.target.value; });
 
   $('#exportBtn').addEventListener('click', exportCsv);
+  $('#exportSkipBtn').addEventListener('click', exportSkipped);
   $('#sealAll').addEventListener('click', () => {
     const rows = allRows();
     const target = !rows.every(r => r.include);
