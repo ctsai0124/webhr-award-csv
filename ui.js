@@ -165,6 +165,7 @@ async function loadDocs(files) {
   state.history = mergeSigners(state.signers);
   reanalyzeDocs({ preserve: false });
 
+  applyCrossDedupe();
   renderHistory();
   render();
 
@@ -739,6 +740,30 @@ function reanalyzeDocs(opts = {}) {
       if (preserveReason) row.reason = prior.reason;
     }
   }
+  applyCrossDedupe();
+}
+
+/**
+ * 所有公文分析完之後，做一次跨公文的重複事由檢查。
+ * 單份公文內各自編的（其1）在不同公文之間會撞號，
+ * 而 WebHR 是以身分證號＋類別＋事由判定重複的。
+ */
+function applyCrossDedupe() {
+  const rows = allRows();
+  for (const r of rows) r.crossDup = false;
+  const fixed = dedupeAcrossDocs(rows);
+  if (!fixed.length) return;
+
+  for (const doc of state.docs) {
+    if (!doc.rows.some(r => r.crossDup)) continue;
+    const note = '有多筆事由與其他公文重複，已加註序號區別，請改寫成實際工作內容後再核章。';
+    doc.assess = {
+      level: doc.assess && doc.assess.level === 'fail' ? 'fail' : 'warn',
+      blockAll: !!(doc.assess && doc.assess.blockAll),
+      note: doc.assess && doc.assess.note ? `${doc.assess.note} ${note}` : note,
+    };
+    for (const r of doc.rows) if (r.crossDup) r.include = false;
+  }
 }
 
 /** 把整理出來的職稱沿革顯示出來，這是判斷「時任」的依據 */
@@ -1108,6 +1133,9 @@ function renderRow(row) {
     line1.append(el('span', { class: 'written',
       text: row.titleHandover ? '名冊職稱完全相符，但這個職務交接過，請確認是哪一任'
                               : '名冊職稱完全相符' }));
+  }
+  if (row.crossDup) {
+    line1.append(el('span', { class: 'written', text: '事由與其他公文重複，已加序號，請改寫' }));
   }
   if (row.scopeAuto) {
     line1.append(el('span', { class: 'written', text: '事由以序號暫代，請改寫成實際工作內容' }));

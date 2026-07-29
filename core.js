@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.16.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -1329,6 +1329,10 @@ const SUBJECT_NOISE = [
 function cleanSubject(subject) {
   let s = String(subject || '');
 
+  // PDF 抽文字時，特殊符號有時會被讀成注音符號或全形記號。
+  // 這些不是內容，出現在事由裡是雜訊。
+  s = s.replace(/[ˇˊˋ˙ˉ｀´]/g, '');
+
   // 一、開頭的發語詞
   s = s.replace(/^(有關|為|關於|茲)/, '');
 
@@ -1354,6 +1358,19 @@ function cleanSubject(subject) {
   ];
   for (const src of TARGETS) {
     const next = s.replace(new RegExp(src), '');
+    if (next !== s) { s = next; break; }
+  }
+
+  // 說明產出而非工作內容的子句。事由要講的是辦了什麼，不是產出什麼文件，
+  // 必須排在名詞後綴之前，否則「結果」「名單」先被砍掉會留下「統計」「優勝」。
+  const OUTPUT_TAILS = [
+    /[之]?(?:競賽|比賽|評鑑|考核|測驗|統計)?(?:結果|成果)(?:及|與|暨)(?:達標|獲獎|優勝|得獎)(?:學校|名單|單位)?$/,
+    /[之]?(?:競賽|比賽|評鑑|考核|測驗|統計)(?:結果|成果)$/,
+    /[之]?(?:達標|獲獎|優勝|得獎)(?:學校|名單|單位)$/,
+    /[之]?(?:結果|成果)$/,
+  ];
+  for (const re of OUTPUT_TAILS) {
+    const next = s.replace(re, '');
     if (next !== s) { s = next; break; }
   }
 
@@ -1495,6 +1512,40 @@ function detectScope(block, pos, written = '') {
   const plain = lead.replace(/[、，,]\s*[\u4e00-\u9fa5]{2,4}\s*$/, '')
                     .replace(/[、，,：:；;\s]+$/, '');
   return plain.length >= 4 ? trimScope(plain) : '';
+}
+
+/**
+ * 跨公文的重複事由檢查。
+ *
+ * 單份公文內的區別是各自做的，不同公文的（其1）會撞在一起。
+ * WebHR 以「身分證號＋獎懲類別＋事由」判定重複，一筆撞號會讓整批匯入失敗，
+ * 所以所有公文都解析完之後要再做一次全域檢查。
+ */
+function dedupeAcrossDocs(rows, limit = 100) {
+  const seen = new Map();
+  const fixed = [];
+
+  for (const row of rows) {
+    const key = `${row.person.id}|${row.category}|${row.reason}`;
+    if (!seen.has(key)) { seen.set(key, 1); continue; }
+
+    // 已經出現過，加上流水號讓它不一樣
+    const n = seen.get(key) + 1;
+    seen.set(key, n);
+
+    const parts = String(row.reason).split('\n');
+    const head = parts.shift() || '';
+    const suffix = parts.length ? `\n${parts.join('\n')}` : '';
+    // 已經有（其N）就換掉，沒有才加
+    const base = head.replace(/（其\d+）/g, '');
+    let main = insertScope(base, `其${n}`);
+    const room = Math.max(0, limit - suffix.length);
+    if (main.length > room) main = main.slice(0, room);
+    row.reason = main + suffix;
+    row.crossDup = true;
+    fixed.push(row.person.name);
+  }
+  return [...new Set(fixed)];
 }
 
 /**
