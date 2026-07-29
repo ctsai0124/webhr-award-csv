@@ -1285,6 +1285,73 @@ function similarReasons(reason, corpus, n) {
 }
 
 /* ---------- 匯出 ---------- */
+/* ---------- 獎懲案件審議表 ---------- */
+
+const REVIEW_HEADER = ['序號', '機關', '單位', '職稱', '姓名', '獎懲', '獎懲事由', '審議結果', '備註'];
+
+/**
+ * 產生獎懲案件審議表，格式比照 WebHR 匯出的版本。
+ * 事由的「依據…函辦理」在 WebHR 版是接在同一格內，這裡沿用同樣寫法。
+ */
+function buildReviewRows() {
+  const org = state.schoolName || '';
+  const rows = [];
+  let seq = 0;
+
+  for (const doc of state.docs) {
+    for (const row of doc.rows || []) {
+      if (!row.include || !row.awardCode) continue;
+      const label = (Object.entries(AWARD_CODES)
+        .find(([, v]) => v === row.awardCode) || [''])[0];
+      rows.push([
+        ++seq,
+        org,
+        row.person.unit || '',
+        row.person.title || '',
+        row.person.name,
+        label,
+        String(row.reason || '').replace(/\n/g, ' '),
+        '',   // 審議結果留白，供會議時填寫
+        '',   // 備註
+      ]);
+    }
+  }
+  return rows;
+}
+
+function exportReview() {
+  const body = buildReviewRows();
+  if (!body.length) {
+    alert('尚未核章任何資料，無法產生審議表。');
+    return;
+  }
+
+  const title = `${state.schoolName || ''} 獎懲案件審議表`.trim();
+  const aoa = [[title], REVIEW_HEADER, ...body];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // 標題橫跨整列
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: REVIEW_HEADER.length - 1 } }];
+  ws['!cols'] = [
+    { wch: 6 },   // 序號
+    { wch: 22 },  // 機關
+    { wch: 10 },  // 單位
+    { wch: 14 },  // 職稱
+    { wch: 10 },  // 姓名
+    { wch: 10 },  // 獎懲
+    { wch: 60 },  // 獎懲事由
+    { wch: 10 },  // 審議結果
+    { wch: 10 },  // 備註
+  ];
+  // 事由那欄字多，把列高放寬讓內容看得完整
+  ws['!rows'] = [{ hpt: 24 }, { hpt: 20 }, ...body.map(() => ({ hpt: 46 }))];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '獎懲案件審議表');
+  XLSX.writeFile(wb, `獎懲案件審議表_${stamp()}.xlsx`);
+}
+
+
 /* ---------- 未敘獎清單 ---------- */
 
 /**
@@ -1468,6 +1535,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   $('#exportBtn').addEventListener('click', exportCsv);
   $('#exportSkipBtn').addEventListener('click', exportSkipped);
+  $('#exportReviewBtn').addEventListener('click', exportReview);
   $('#sealAll').addEventListener('click', () => {
     const rows = allRows();
     const target = !rows.every(r => r.include);
