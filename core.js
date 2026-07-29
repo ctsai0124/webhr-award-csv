@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.18.0';
+const APP_VERSION = '1.19.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -1399,6 +1399,30 @@ function cleanSubject(subject) {
 }
 
 
+/**
+ * 依實際情形挑動詞。
+ *
+ * 學校端 1761 筆語料的分布：辦理 368、擔任 338、協辦 293、參與 89、
+ * 協助 84、協助辦理 54、指導 46、主辦 40、承辦 37。
+ * 「協助辦理」其實不是主流，過去一律用它並不貼近實務。
+ */
+function pickVerb(block, core) {
+  const t = String(block || '');
+  const c = String(core || '');
+
+  // 帶學生參加比賽 —— 語料裡這種一律用「指導」
+  if (/指導|參賽|學生參加|所帶班級/.test(t + c)) return '指導';
+  // 選務、投開票所、委員會委員之類的職務 —— 用「擔任」
+  if (/投開票所|選務|委員會委員|導護|監察員|管理員/.test(t + c)) return '擔任';
+  // 明確是主要承辦人
+  if (/主要業務承辦|業務承辦人|主辦人員/.test(t)) return '承辦';
+  if (/承辦人員/.test(t)) return '辦理';
+  // 明確是協辦
+  if (/協辦人員|協助人員|襄助/.test(t)) return '協辦';
+  return '協助辦理';
+}
+
+
 function draftReason(meta, block, opts = {}) {
   const { withBasis = true, limit = 100 } = opts;
 
@@ -1430,14 +1454,21 @@ function draftReason(meta, block, opts = {}) {
   }
 
   // 動詞：擬辦裡自稱承辦就用「辦理」，否則用「協助辦理」
-  const verb = verbFromBody ? '' : (/承辦人員|業務承辦|主要業務承辦/.test(block) ? '辦理' : '協助辦理');
+  const verb = verbFromBody ? '' : pickVerb(block, core);
 
   // 評鑑類公文若查得到本校成績，語料顯示會寫成三段式：
   //   辦理…業務，榮獲優等，績效良好   （語料中 77 筆）
   // 這比單純「辛勞得力」更能反映實際貢獻。
   const grade = (meta.subject || '').match(/榮獲(特優|優等|甲等|第[一二三]名)/)
     || String(block || '').match(/成績為[：:]?(特優|優等|甲等)/);
-  const praise = grade ? `，榮獲${grade[1]}` : '';
+
+  // 學校端常在事由帶入達成的數據門檻（語料 1761 筆裡有 178 筆）：
+  //   協助本校參與…上網飆暑假作業活動，學生登錄率達90%且過關人數達50%以上，辛勞得力
+  const metric = String(block || '').match(
+    /((?:通過|登錄|註冊|施測|提報|出席|參與)?(?:率|人數|比率|時數)?\s*達\s*\d+\s*(?:%|％|人|次|小時|件)(?:以上)?)/);
+
+  const praise = grade ? `，榮獲${grade[1]}`
+    : (metric ? `，${metric[1].replace(/\s+/g, '')}` : '');
 
   let main = core ? `${verb}${core}${praise}，辛勞得力` : '辦理相關業務，辛勞得力';
 
