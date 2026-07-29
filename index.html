@@ -96,19 +96,18 @@
   </details>
 
   <details class="panel">
-    <summary><span>選用：Mac 端 OCR</span><small>掃描件改用自己電腦辨識，比瀏覽器內建準確</small></summary>
+    <summary><span>選用：進階辨識</span><small>掃描件改用指定電腦辨識，比瀏覽器內建準確</small></summary>
     <div class="panel-body">
       <p class="hint">
-        設定後，遇到沒有文字層的掃描件時會把 PDF 送到你自己架的服務，
-        由 Mac 上的 Vision 辨識再回傳。連不上時會自動退回瀏覽器 OCR，不影響使用。
+        <span id="macOcrHint"></span>
         <b>只有 PDF 本身會離開瀏覽器，姓名與身分證號一律留在本機解析。</b>
       </p>
       <div class="field-row">
         <label>服務網址
           <input type="url" id="macOcrServer" placeholder="https://你的服務.zeabur.app" autocomplete="off">
         </label>
-        <label>網頁金鑰
-          <input type="password" id="macOcrKey" placeholder="WEB_KEY" autocomplete="off">
+        <label>密碼
+          <input type="password" id="macOcrKey" placeholder="向管理者索取" autocomplete="off">
         </label>
         <button type="button" class="ghost" id="macOcrSave">儲存</button>
         <button type="button" class="ghost" id="macOcrTest">測試連線</button>
@@ -186,8 +185,8 @@
 <script src="pdf.min.js"></script>
   <script src="tesseract.min.js"></script>
   <script src="schools.js?v=1"></script>
-  <script src="core.js?v=16"></script>
+  <script src="core.js?v=17"></script>
   <script src="memory.js?v=1"></script>
-  <script src="ui.js?v=19"></script>
+  <script src="ui.js?v=20"></script>
 </body>
 </html>

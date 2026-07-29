@@ -69,6 +69,28 @@ function wireDrop(id, accept, handler) {
   zone.addEventListener('drop', e => handler([...e.dataTransfer.files]));
 }
 
+/**
+ * 顯示辨識進度。
+ * OCR 可能要跑好幾十秒，使用者需要看得出來還在動、還要等多久，
+ * 所以用大字級的百分比加進度條，而不是一行小字。
+ */
+function showProgress({ file, index, total, detail, pct }) {
+  const box = $('#docMsg');
+  box.hidden = false;
+  box.className = 'loaded progress';
+
+  const bar = typeof pct === 'number'
+    ? `<div class="pb"><div class="pb-fill" style="width:${Math.min(100, Math.max(0, pct))}%"></div></div>`
+    : '<div class="pb"><div class="pb-fill indeterminate"></div></div>';
+
+  box.innerHTML =
+    `<div class="pg-head">`
+    + `<span class="pg-count">${index} / ${total}</span>`
+    + `<span class="pg-file">${file}</span>`
+    + (typeof pct === 'number' ? `<span class="pg-pct">${Math.round(pct)}%</span>` : '')
+    + `</div>${bar}<div class="pg-detail">${detail}</div>`;
+}
+
 function say(id, msg, isErr = false) {
   const box = $(id);
   box.hidden = false;
@@ -137,8 +159,14 @@ async function loadDocs(files) {
   for (let i = 0; i < pdfs.length; i++) {
     say('#docMsg', `讀取中… ${i + 1} / ${pdfs.length}　${pdfs[i].name}`);
     try {
-      const result = await readPdfText(pdfs[i], detail => {
-        say('#docMsg', `${i + 1} / ${pdfs.length}　${pdfs[i].name}　${detail}`);
+      const result = await readPdfText(pdfs[i], (detail, pct) => {
+        showProgress({
+          file: pdfs[i].name,
+          index: i + 1,
+          total: pdfs.length,
+          detail,
+          pct,
+        });
       });
       state.docs.push({
         key: keyOf(pdfs[i]),
@@ -204,6 +232,15 @@ function normalizeOcrText(text) {
 
    會離開瀏覽器的只有 PDF 本身，辨識結果的解析仍在本機做。
    設定存在 localStorage，沒設定就完全不會用到這條路。 */
+/**
+ * 辨識服務的網址。填好之後使用者只要輸入密碼就能用。
+ *
+ * 網址公開沒關係 —— 沒有密碼進不去。密碼設在服務端的環境變數 WEB_KEY，
+ * 絕對不要寫進這裡，這是公開的 repo。
+ * 留空的話畫面上會同時出現網址和密碼兩個欄位，方便自架的人使用。
+ */
+const MAC_OCR_SERVER = '';
+
 const MAC_OCR_KEY = 'webhr-award-mac-ocr';
 
 function avgConfidence(tokens) {
@@ -215,7 +252,9 @@ function avgConfidence(tokens) {
 function macOcrConfig() {
   try {
     const v = JSON.parse(localStorage.getItem(MAC_OCR_KEY) || 'null');
-    return v && v.server ? v : null;
+    if (!v) return null;
+    const server = MAC_OCR_SERVER || v.server;
+    return server ? { server, key: v.key || '' } : null;
   } catch { return null; }
 }
 
@@ -245,7 +284,7 @@ async function macOcr(file, onProgress = () => {}) {
     bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   }
 
-  onProgress('上傳到 Mac 辨識…');
+  onProgress('正在傳送給辨識電腦…');
   const { job_id: jobId } = await macOcrRequest('/jobs', {
     method: 'POST',
     body: JSON.stringify({ pdf_b64: btoa(bin) }),
@@ -260,9 +299,11 @@ async function macOcr(file, onProgress = () => {}) {
     const st = await macOcrRequest(`/jobs/${jobId}`);
     if (st.status === 'done') return st.tokens || [];
     if (st.status === 'failed') throw new Error(st.error || 'Mac 端辨識失敗');
+    // 辨識通常 10~40 秒，用經過時間估個大概讓進度條會動
+    const est = Math.min(95, (waited / 40) * 100);
     onProgress(st.status === 'pending'
-      ? `等待 Mac 端領取…（${waited} 秒，請確認 worker 有在執行）`
-      : `Mac 辨識中…（${waited} 秒）`);
+      ? `等待辨識電腦接收…（已 ${waited} 秒）`
+      : `辨識中…（已 ${waited} 秒）`, st.status === 'pending' ? undefined : est);
   }
   throw new Error('等待逾時，請確認 Mac 上的 worker 是否正在執行');
 }
@@ -271,13 +312,26 @@ async function macOcr(file, onProgress = () => {}) {
 function renderMacOcr() {
   const cfg = macOcrConfig();
   const msg = $('#macOcrMsg');
+  const fixed = !!MAC_OCR_SERVER;
+
+  // 網址已經寫死時，畫面上只留密碼欄，使用者不必知道服務位置
+  const serverField = $('#macOcrServer').closest('label');
+  if (serverField) serverField.hidden = fixed;
+  $('#macOcrHint').textContent = fixed
+    ? '輸入密碼後，掃描件會交由指定的電腦辨識，準確度比瀏覽器內建高。'
+      + '沒有密碼或連線失敗時會自動改用瀏覽器辨識，不影響使用。'
+    : '設定後，遇到沒有文字層的掃描件時會把 PDF 送到你自己架的服務辨識。'
+      + '連不上時會自動退回瀏覽器 OCR，不影響使用。';
+
   $('#macOcrClear').hidden = !cfg;
   if (cfg) {
-    $('#macOcrServer').value = cfg.server;
+    if (!fixed) $('#macOcrServer').value = cfg.server;
     $('#macOcrKey').value = cfg.key || '';
     msg.hidden = false;
     msg.className = 'loaded';
-    msg.innerHTML = `已設定：<b>${cfg.server}</b>　掃描件會優先送到這裡辨識`;
+    msg.innerHTML = fixed
+      ? '密碼已儲存，掃描件會交由指定電腦辨識'
+      : `已設定：<b>${cfg.server}</b>　掃描件會優先送到這裡辨識`;
   } else {
     msg.hidden = true;
   }
@@ -346,9 +400,14 @@ function wireMacOcr() {
   renderMacOcr();
 
   $('#macOcrSave').addEventListener('click', () => {
-    const server = $('#macOcrServer').value.trim();
+    const server = MAC_OCR_SERVER || $('#macOcrServer').value.trim();
     const key = $('#macOcrKey').value.trim();
     const msg = $('#macOcrMsg');
+    if (MAC_OCR_SERVER) {
+      // 網址寫死時，密碼清空就等於停用
+      saveMacOcrConfig(key ? { server, key } : null);
+      return;
+    }
     if (!server) { saveMacOcrConfig(null); return; }
     if (!/^https?:\/\//.test(server)) {
       msg.hidden = false; msg.className = 'loaded err';
@@ -372,7 +431,7 @@ function wireMacOcr() {
 
   $('#macOcrTest').addEventListener('click', async () => {
     const msg = $('#macOcrMsg');
-    const server = $('#macOcrServer').value.trim();
+    const server = MAC_OCR_SERVER || $('#macOcrServer').value.trim();
     if (!server) return;
     msg.hidden = false; msg.className = 'loaded'; msg.textContent = '連線中…';
     try {
@@ -426,10 +485,10 @@ async function readPdfText(file, onProgress = () => {}) {
           ocrConfidence: avgConfidence(tokens),
         };
       }
-      onProgress('Mac 沒有辨識到文字，改用瀏覽器 OCR…');
+      onProgress('沒有辨識到文字，改用瀏覽器辨識…');
     } catch (err) {
       // Mac 那邊沒開、網路不通都可能失敗，退回瀏覽器 OCR 仍可運作
-      onProgress(`Mac OCR 失敗（${err.message}），改用瀏覽器 OCR…`);
+      onProgress(`連線失敗（${err.message}），改用瀏覽器辨識…`);
     }
   }
 
@@ -444,7 +503,9 @@ async function readPdfText(file, onProgress = () => {}) {
     langPath: new URL('.', window.location.href).href,
     logger: message => {
       if (message.status === 'recognizing text') {
-        onProgress(`OCR 第 ${currentPage}/${pages.length} 頁　${Math.round(message.progress * 100)}%`);
+        // 整體進度 = 已完成的頁數 + 這一頁的進度
+        const overall = ((currentPage - 1 + message.progress) / pages.length) * 100;
+        onProgress(`文字辨識中　第 ${currentPage} / ${pages.length} 頁`, overall);
       } else if (message.status === 'loading language traineddata') {
         onProgress('首次載入繁體中文 OCR 模型…');
       }
@@ -456,7 +517,8 @@ async function readPdfText(file, onProgress = () => {}) {
   try {
     for (let i = 0; i < pages.length; i++) {
       currentPage = i + 1;
-      onProgress(`準備 OCR 第 ${currentPage}/${pages.length} 頁…`);
+      onProgress(`準備辨識第 ${currentPage} / ${pages.length} 頁…`,
+        ((currentPage - 1) / pages.length) * 100);
       const base = pages[i].page.getViewport({ scale: 1 });
       const scale = Math.min(2, 2800 / Math.max(base.width, base.height));
       const viewport = pages[i].page.getViewport({ scale });

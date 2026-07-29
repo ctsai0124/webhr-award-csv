@@ -514,3 +514,43 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
   max-width: 100%; font-size: 12.5px; padding: 3px 6px;
   border: 1px solid var(--hair); border-radius: 2px; background: #fff;
 }
+
+/* ---------- 辨識進度 ---------- */
+.loaded.progress {
+  background: #F6F8FA; border-color: #DCE3EA; color: var(--ink);
+  padding: 14px 16px;
+}
+.pg-head {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px;
+}
+.pg-count {
+  font-family: var(--mono); font-size: 13px; color: var(--indigo); flex: none;
+}
+.pg-file {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--stone);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 百分比是使用者最關心的資訊，放大到一眼就看得到 */
+.pg-pct {
+  flex: none; font-family: var(--mono); font-size: 26px; font-weight: 600;
+  line-height: 1; color: var(--indigo); font-variant-numeric: tabular-nums;
+}
+.pg-detail { margin-top: 8px; font-size: 13px; color: var(--stone); }
+
+.pb {
+  height: 8px; border-radius: 4px; background: #E4E9EE; overflow: hidden;
+}
+.pb-fill {
+  height: 100%; border-radius: 4px; background: var(--indigo);
+  transition: width .3s ease;
+}
+/* 進度未知時（例如等待對方接收）用來回移動的動畫表示還在運作 */
+.pb-fill.indeterminate {
+  width: 35%; animation: slide 1.4s ease-in-out infinite;
+}
+@keyframes slide {
+  0% { margin-left: -35%; } 100% { margin-left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pb-fill.indeterminate { animation: none; width: 100%; opacity: .4; }
+}
