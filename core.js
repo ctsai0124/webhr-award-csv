@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.13.0';
+const APP_VERSION = '1.15.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -57,6 +57,10 @@ const Big5 = (() => {
         buf[0] = lead; buf[1] = trail;
         const ch = dec.decode(buf);
         if (ch.length !== 1 || ch === '\uFFFD') continue;
+        // 跳過私用區（造字）。這些碼位在每台電腦代表的字不一樣，
+        // 寫進 CSV 匯入 WebHR 只會變成亂碼，要當成缺字提醒使用者。
+        const cp = ch.codePointAt(0);
+        if (cp >= 0xE000 && cp <= 0xF8FF) continue;
         if (PREFER_LAST.has(ch)) { map.set(ch, [lead, trail]); continue; }
         if (!map.has(ch)) map.set(ch, [lead, trail]);
       }
@@ -1338,19 +1342,38 @@ function cleanSubject(subject) {
     /[，,、]?\s*(?:詳如說明|請查照|請依說明[^，。]*|請依敘獎清冊[^，。]*|請各校[^，。]*|請逕依[^，。]*|請惠予[^，。]*|請依權責[^，。]*|請貴校[^，。]*|以資鼓勵|如說明)[\s\S]*$/g,
     '');
 
-  // 四、案件性質的後綴。留下前面真正描述做什麼的部分
-  s = s.replace(/[之]?(?:有功人員)?(?:敘獎|獎勵)(?:案|事宜|一案)$/, '')
-       .replace(/(?:成績|名單|清冊|一覽表|成果報告)$/, '')
-       .replace(/案$/, '');
+  // 四、說明受獎對象的子句，連同後面的「敘獎N案」一起砍。
+  // 必須排在案件後綴之前 —— 否則「敘獎1案」先被砍掉，
+  // 「…之現職教師及行政人員」的「人員」也會被吃掉，留下半截子句。
+  const TAIL = '(?:敘獎|獎勵|敘獎獎勵)?\\s*\\d*\\s*(?:案|一案|乙案|事宜)?$';
+  const TARGETS = [
+    `[之]?(?:現職)?(?:教師|人員|同仁)(?:及|與|暨)(?:相關)?(?:行政)?(?:人員|同仁|教師)${TAIL}`,
+    `[之]?(?:相關)?(?:工作|承辦|協辦|業務)(?:人員|同仁)${TAIL}`,
+    `[之]?(?:現職|相關|有功)(?:教師|人員|同仁)${TAIL}`,
+    `[之]?(?:資訊|午餐|衛生|體育)?教育人員${TAIL}`,
+  ];
+  for (const src of TARGETS) {
+    const next = s.replace(new RegExp(src), '');
+    if (next !== s) { s = next; break; }
+  }
 
-  // 五、指稱行文雙方的詞。事由是描述工作內容，不需要這些
+  // 五、剩下的案件性質後綴。公文常寫「敘獎1案」表示件數，
+  // 數字要連同「案」一起砍，否則會留下孤零零的數字。
+  s = s.replace(/[之]?(?:有功|相關)?(?:人員|教師|同仁)?(?:敘獎|獎勵|敘獎獎勵)\s*\d*\s*(?:案|一案|事宜|乙案)?$/, '')
+       .replace(/(?:成績|名單|清冊|一覽表|成果報告)$/, '')
+       .replace(/\s*\d+\s*案$/, '')
+       // 「案」單獨結尾才砍。「實施方案」「專案」「方案」是計畫名稱的一部分，
+       // 前面是這些字時不能動。
+       .replace(/(?<![方專議提個本該此草結專])案$/, '');
+
+  // 六、指稱行文雙方的詞。事由是描述工作內容，不需要這些
   s = s.replace(/貴校|貴屬|貴單位|本市公私立高級中等以下學校|本局所屬|所屬機關學校/g, '')
        .replace(/^本局|^本校/, '');
 
-  // 六、開頭殘留的動詞。外層還會加「協助辦理」，留著會變成「協助辦理辦理…」
+  // 七、開頭殘留的動詞。外層還會加「協助辦理」，留著會變成「協助辦理辦理…」
   s = s.replace(/^(?:協助)?(?:辦理|承辦|協辦|推動|舉辦)/, '');
 
-  // 七、末尾殘留的名詞化後綴。語料顯示事由講的是「做了什麼事」，
+  // 八、末尾殘留的名詞化後綴。語料顯示事由講的是「做了什麼事」，
   // 不是「產出什麼文件」，所以優勝名單、成績一覽表這類要砍
   s = s.replace(/[之]?(?:優勝|得獎|獲獎)?(?:名單|清冊|一覽表|統計表|成績|結果)$/, '')
        .replace(/[之]?(?:相關)?(?:事宜|事項|工作)$/, '');
@@ -1474,6 +1497,27 @@ function detectScope(block, pos, written = '') {
   return plain.length >= 4 ? trimScope(plain) : '';
 }
 
+/**
+ * 區別詞能不能用。
+ * 抓到的如果是擬辦的行文說明而不是工作範圍，寧可不用 ——
+ * 括號裡出現別人的姓名或「敘獎人員為…」這種句子很不妥。
+ */
+function usableScope(scope, roster) {
+  const t = String(scope || '').trim();
+  if (t.length < 2 || t.length > 16) return false;
+
+  // 含有名冊上其他人的姓名
+  if (roster && roster.some(p => t.includes(p.name))) return false;
+
+  // 行文說明的特徵：敘獎、名單、人員為、以及…
+  if (/敘獎|獎勵|名單|人員為|以及|如下|等人|各敘|每人/.test(t)) return false;
+
+  // 職稱本身不算工作範圍
+  if (/^(?:老師|教師|主任|組長|導師|護理師|幹事|工友|校長)$/.test(t)) return false;
+
+  return /[\u4e00-\u9fa5]/.test(t);
+}
+
 function trimScope(s) {
   return s.replace(/^(協助辦理|協助|辦理|承辦|協辦|擬|建議|敘獎名單如下)/, '')
           .replace(/(人員|名單|如下)$/, '')
@@ -1503,7 +1547,7 @@ function trimOverlap(scope, head) {
  * 把同一人的重複事由改寫成互不相同。
  * 只在真的會撞在一起時才動手，正常情形不改。
  */
-function differentiateReasons(block, rows, limit = 100) {
+function differentiateReasons(block, rows, limit = 100, roster = null) {
   const byPerson = new Map();
   for (const row of rows) {
     const list = byPerson.get(row.person.id) || [];
@@ -1516,20 +1560,28 @@ function differentiateReasons(block, rows, limit = 100) {
     if (list.length < 2) continue;
     if (new Set(list.map(r => r.reason)).size === list.length) continue;
 
-    for (const row of list) {
+    // 先看看能不能抓到堪用又互不相同的區別詞
+    const scopes = list.map(row => {
       const raw = detectScope(block, row.sourcePos, row.written || '');
-      if (!raw) continue;
+      return usableScope(raw, roster) ? raw : '';
+    });
+    const good = scopes.every(Boolean) && new Set(scopes).size === scopes.length;
+
+    list.forEach((row, i) => {
       const parts = String(row.reason).split('\n');
       const head = parts.shift() || '';
-      const scope = trimOverlap(raw, head);
-      if (!scope) continue;
-
       const suffix = parts.length ? `\n${parts.join('\n')}` : '';
-      let main = insertScope(head, scope);
+
+      // 抓不到好的區別詞就用序號。事由必須互不相同，
+      // 否則 WebHR 會以「重複資料」拒絕整批匯入。
+      const mark = good ? trimOverlap(scopes[i], head) || scopes[i] : `其${i + 1}`;
+
+      let main = insertScope(head, mark);
       const room = Math.max(0, limit - suffix.length);
       if (main.length > room) main = main.slice(0, room);
       row.reason = main + suffix;
-    }
+      row.scopeAuto = !good;   // 用序號代替的要提醒使用者補寫
+    });
 
     if (new Set(list.map(r => r.reason)).size !== list.length) {
       unresolved.push(list[0].person.name);

@@ -677,7 +677,7 @@ function analyzeDoc(doc) {
 
   // 同一人多筆而事由撞在一起時，WebHR 會拒絕匯入。
   // 先自動從擬辦的句段抓出區別寫進事由，真的抓不出來才回頭麻煩人工。
-  const stillSame = differentiateReasons(block, built);
+  const stillSame = differentiateReasons(block, built, 100, state.roster);
   if (stillSame.length) {
     const note = `${stillSame.join('、')} 有多筆敘獎，但擬辦看不出工作範圍的差異，` +
       '請自行補上區別後再核章。';
@@ -687,8 +687,21 @@ function analyzeDoc(doc) {
       note: assess.note ? `${assess.note} ${note}` : note,
     };
   }
+  // 用序號硬湊區別的，事由沒有實質內容，不預設核章
+  const autoScoped = built.filter(r => r.scopeAuto).map(r => r.person.name);
+  if (autoScoped.length) {
+    const note = `${[...new Set(autoScoped)].join('、')} 有多筆敘獎但擬辦看不出工作差異，` +
+      '已暫時以（其1）（其2）區別，請改寫成實際工作內容後再核章。';
+    assess = {
+      level: assess.level === 'fail' ? 'fail' : 'warn',
+      blockAll: !!assess.blockAll,
+      note: assess.note ? `${assess.note} ${note}` : note,
+    };
+  }
+
   for (const row of built) {
-    row.include = row._auto && !assess.blockAll && !stillSame.includes(row.person.name);
+    row.include = row._auto && !assess.blockAll
+      && !stillSame.includes(row.person.name) && !row.scopeAuto;
     delete row._auto;
   }
 
@@ -1096,6 +1109,9 @@ function renderRow(row) {
       text: row.titleHandover ? '名冊職稱完全相符，但這個職務交接過，請確認是哪一任'
                               : '名冊職稱完全相符' }));
   }
+  if (row.scopeAuto) {
+    line1.append(el('span', { class: 'written', text: '事由以序號暫代，請改寫成實際工作內容' }));
+  }
   if (row.memoryLabel) {
     line1.append(el('span', { class: 'from-memory', text: row.memoryLabel }));
   }
@@ -1482,13 +1498,24 @@ function exportCsv() {
 
 /** Big5 缺字：政府系統的老問題，不能靜默丟掉，要讓使用者知道並選擇怎麼辦 */
 function confirmMissing(chars) {
+  // 私用區字元是各機關自己的造字，換一台電腦就是不同的字，
+  // 寫進 CSV 一定變亂碼，要特別點出來
+  const pua = chars.filter(c => {
+    const cp = c.codePointAt(0);
+    return cp >= 0xE000 && cp <= 0xF8FF;
+  });
   const who = allRows()
     .filter(r => r.include && chars.some(c => r.person.name.includes(c)))
     .map(r => r.person.name);
   const names = who.length ? `\n受影響人員：${[...new Set(who)].join('、')}` : '';
 
+  const puaNote = pua.length
+    ? `\n\n其中 ${pua.length} 個是造字（本機自訂字元），這類字在別台電腦會顯示成不同的字，` +
+      '建議改用 UTF-8 匯出，或在 WebHR 直接以身分證號比對。'
+    : '';
+
   return confirm(
-    `這些字不在 Big5 字集裡：${chars.join('　')}${names}\n\n` +
+    `這些字不在 Big5 標準字集裡：${chars.join('　')}${names}${puaNote}\n\n` +
     `繼續匯出的話，這些字會變成「?」。\n\n` +
     `兩個處理方向：\n` +
     `1. 取消，改選 UTF-8 編碼再匯出\n` +
