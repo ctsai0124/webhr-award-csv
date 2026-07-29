@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.17.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -1477,17 +1477,35 @@ function detectScope(block, pos, written = '') {
   const [s0, s1] = segmentAt(block, pos);
   const AWARD = /(嘉獎?|記功|記大功)[裝訂線]?\s*[一乙二兩三１２1-3]\s*[次支個]/;
 
-  // 競賽類公文同一人多筆，差別多半在班級、組別或名次，優先抓這些
-  const near = block.slice(Math.max(0, pos - 24), pos + written.length + 24);
+  // 競賽類公文同一人多筆，差別多半在班級、組別或階段，優先抓這些。
+  // 搜尋範圍限制在所屬句段內，否則第二筆會抓到第一筆的區別詞。
+  const near = block.slice(
+    Math.max(s0, pos - 24),
+    Math.min(s1, pos + written.length + 24));
+  // 依教育局歷年敘獎令（636 筆）歸納出的區別詞類型。
+  // 同一案件多筆時，實務上用的是工作階段或範圍，例如
+  //   「…海外友好城市兒童聯合畫展暨頒獎典禮」(畫作徵選階段)
+  //   「…」(畫作展覽階段) / (頒獎典禮階段)
   const CONTEST = [
+    /([\u4e00-\u9fa5]{2,8}階段)/,
     /([一二三四五六1-6]\s*年?[甲乙丙丁戊己庚忠孝仁愛信義和平]\s*班?)/,
     /((?:低|中|高)年級組|幼兒?組|團體組|個人組)/,
+    /(第[一二三四五六1-9\d]{1,3}(?:梯次|場次|階段|區))/,
     /(特優|優等|甲等|乙等|第[一二三四五六1-6]名|冠軍|亞軍|季軍)/,
     /((?:國語文?|數學|英語|自然|社會|資訊|體育|音樂|美術)科?)/,
   ];
+  // 同一句段裡列了多個人各自帶班級時，要取離這個人最近的那個，
+  // 不能取第一個 —— 否則兩人會拿到同一個區別詞。
+  const anchor = pos - Math.max(s0, pos - 24);
   for (const re of CONTEST) {
-    const m = near.match(re);
-    if (m) return m[1].replace(/\s+/g, '');
+    const all = [...near.matchAll(new RegExp(re.source, 'g'))];
+    if (!all.length) continue;
+    let best = all[0], bestD = Infinity;
+    for (const m of all) {
+      const d = Math.abs(m.index - anchor);
+      if (d < bestD) { bestD = d; best = m; }
+    }
+    return best[1].replace(/\s+/g, '');
   }
 
   let lead = block.slice(s0, pos)
