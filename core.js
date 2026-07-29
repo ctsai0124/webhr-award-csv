@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.17.0';
+const APP_VERSION = '1.18.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -1432,7 +1432,14 @@ function draftReason(meta, block, opts = {}) {
   // 動詞：擬辦裡自稱承辦就用「辦理」，否則用「協助辦理」
   const verb = verbFromBody ? '' : (/承辦人員|業務承辦|主要業務承辦/.test(block) ? '辦理' : '協助辦理');
 
-  let main = core ? `${verb}${core}，辛勞得力` : '辦理相關業務，辛勞得力';
+  // 評鑑類公文若查得到本校成績，語料顯示會寫成三段式：
+  //   辦理…業務，榮獲優等，績效良好   （語料中 77 筆）
+  // 這比單純「辛勞得力」更能反映實際貢獻。
+  const grade = (meta.subject || '').match(/榮獲(特優|優等|甲等|第[一二三]名)/)
+    || String(block || '').match(/成績為[：:]?(特優|優等|甲等)/);
+  const praise = grade ? `，榮獲${grade[1]}` : '';
+
+  let main = core ? `${verb}${core}${praise}，辛勞得力` : '辦理相關業務，辛勞得力';
 
   let basis = '';
   if (withBasis && meta.agency && meta.year && meta.docNo) {
@@ -1540,28 +1547,34 @@ function detectScope(block, pos, written = '') {
  * 所以所有公文都解析完之後要再做一次全域檢查。
  */
 function dedupeAcrossDocs(rows, limit = 100) {
-  const seen = new Map();
-  const fixed = [];
+  const strip = t => String(t || '').replace(/（其\d+）/g, '');
 
+  // 先用「剝掉序號的事由」分組。單份公文內編過的（其1）（其2）是不同字串，
+  // 若直接拿全文當鍵值，跨公文再編號時會撞出重複的（其2）。
+  const groups = new Map();
   for (const row of rows) {
-    const key = `${row.person.id}|${row.category}|${row.reason}`;
-    if (!seen.has(key)) { seen.set(key, 1); continue; }
+    const key = `${row.person.id}|${row.category}|${strip(row.reason)}`;
+    const list = groups.get(key) || [];
+    list.push(row);
+    groups.set(key, list);
+  }
 
-    // 已經出現過，加上流水號讓它不一樣
-    const n = seen.get(key) + 1;
-    seen.set(key, n);
+  const fixed = [];
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
 
-    const parts = String(row.reason).split('\n');
-    const head = parts.shift() || '';
-    const suffix = parts.length ? `\n${parts.join('\n')}` : '';
-    // 已經有（其N）就換掉，沒有才加
-    const base = head.replace(/（其\d+）/g, '');
-    let main = insertScope(base, `其${n}`);
-    const room = Math.max(0, limit - suffix.length);
-    if (main.length > room) main = main.slice(0, room);
-    row.reason = main + suffix;
-    row.crossDup = true;
-    fixed.push(row.person.name);
+    // 同一組全部重新編號，確保序號連續且不重複
+    list.forEach((row, i) => {
+      const parts = String(row.reason).split('\n');
+      const head = strip(parts.shift() || '');
+      const suffix = parts.length ? `\n${parts.join('\n')}` : '';
+      let main = insertScope(head, `其${i + 1}`);
+      const room = Math.max(0, limit - suffix.length);
+      if (main.length > room) main = main.slice(0, room);
+      row.reason = main + suffix;
+      row.crossDup = true;
+    });
+    fixed.push(list[0].person.name);
   }
   return [...new Set(fixed)];
 }
