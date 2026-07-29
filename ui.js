@@ -79,16 +79,30 @@ function showProgress({ file, index, total, detail, pct }) {
   box.hidden = false;
   box.className = 'loaded progress';
 
-  const bar = typeof pct === 'number'
-    ? `<div class="pb"><div class="pb-fill" style="width:${Math.min(100, Math.max(0, pct))}%"></div></div>`
-    : '<div class="pb"><div class="pb-fill indeterminate"></div></div>';
+  const known = typeof pct === 'number';
+  const value = known ? Math.min(100, Math.max(0, pct)) : 0;
 
-  box.innerHTML =
-    `<div class="pg-head">`
-    + `<span class="pg-count">${index} / ${total}</span>`
-    + `<span class="pg-file">${file}</span>`
-    + (typeof pct === 'number' ? `<span class="pg-pct">${Math.round(pct)}%</span>` : '')
-    + `</div>${bar}<div class="pg-detail">${detail}</div>`;
+  // 用 DOM 建構而不是 innerHTML —— 檔名是使用者提供的，
+  // 特製的檔名若直接當 HTML 插入會被執行。
+  const head = el('div', { class: 'pg-head' },
+    el('span', { class: 'pg-count', text: `${index} / ${total}` }),
+    el('span', { class: 'pg-file', title: file, text: file }),
+    known ? el('span', { class: 'pg-pct', text: `${Math.round(value)}%` }) : null,
+  );
+
+  const fill = el('div', { class: 'pb-fill' + (known ? '' : ' indeterminate') });
+  if (known) fill.style.width = `${value}%`;
+
+  const bar = el('div', {
+    class: 'pb',
+    role: 'progressbar',
+    'aria-valuenow': known ? String(Math.round(value)) : null,
+    'aria-valuemin': '0',
+    'aria-valuemax': '100',
+    'aria-label': '辨識進度',
+  }, fill);
+
+  box.replaceChildren(head, bar, el('div', { class: 'pg-detail', text: detail }));
 }
 
 function say(id, msg, isErr = false) {
