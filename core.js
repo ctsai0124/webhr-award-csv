@@ -2,7 +2,7 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.19.0';
+const APP_VERSION = '1.20.0';
 const APP_DATE = '2026-07-27';
 
 
@@ -427,7 +427,14 @@ function parseDocMeta(text, filename = '') {
 
   // 主旨：到「說明」或「正本」為止
   let subject = '';
-  if (mSub) subject = mSub[1].replace(/\s+/g, '').replace(/[。．]+$/, '');
+  // PDF 抽文字時特殊符號常被讀成注音符號（網路假期ˇ上網飆）。
+  // 這裡就清掉，後面不論走引號或 cleanSubject 哪條路都不會殘留。
+  if (mSub) {
+    subject = mSub[1]
+      .replace(/\s+/g, '')
+      .replace(/[ˇˊˋ˙ˉ｀´]/g, '')
+      .replace(/[。．]+$/, '');
+  }
 
   // OCR 把主旨讀壞時（大量拉丁亂碼、中文比例過低），改用檔名。
   // 檔名是承辦人自己打的，通常完整正確；但公文內容仍優先，只在明顯壞掉時才換。
@@ -1434,7 +1441,7 @@ function draftReason(meta, block, opts = {}) {
     (meta.subject || '').match(/「([^「」]{4,60})」/) ||
     (meta.subject || '').match(/『([^『』]{4,60})』/);
   if (quoted) {
-    core = quoted[1];
+    core = quoted[1].replace(/[ˇˊˋ˙ˉ｀´]/g, '');
   } else {
     core = cleanSubject(meta.subject || '');
   }
