@@ -130,15 +130,26 @@ header h1 {
 }
 .drop input { display: none; }
 
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.upload-card { min-width: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+
+/* 兩欄的內容量不同（左邊多一塊下載路徑說明），用 flex 讓上傳框自己撐開，
+   標籤與範例按鈕才會左右對齊。 */
+.upload-card {
+  min-width: 0; display: flex; flex-direction: column; height: 100%;
+}
+.upload-card .drop { flex: 1; justify-content: center; }
+/* 說明區塊固定在上傳框之後，不參與撐開 */
+.upload-card .loaded,
+.upload-card .ocr-info,
+.upload-card .demo-link,
+.upload-card .demo-box { flex: none; }
 .upload-label { margin: 0 0 7px; color: var(--stone); font-size: 12px; }
 .upload-label span {
   display: inline-block; margin-right: 5px; padding: 1px 6px; border-radius: 4px;
   color: var(--vermil); background: var(--red-bg); font-weight: 600;
 }
 .upload-label.optional span { color: var(--indigo); background: var(--indigo-soft); }
-.source-guide {
+.source-guide, .source-guide-alt {
   margin-bottom: 10px; padding: 11px 12px; border: 1px solid #D7E2E9;
   border-radius: 7px; background: var(--indigo-soft); font-size: 12px;
 }
