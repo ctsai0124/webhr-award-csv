@@ -114,6 +114,41 @@ function say(id, msg, isErr = false) {
 }
 
 /* ---------- 1. 人員基本資料 ---------- */
+/* ---------- 一鍵載入範例 ----------
+   範例檔和網頁在同一個網域，直接抓下來餵進正常流程就好，
+   使用者不必先下載再上傳。內容全部虛構，不含真實個資。 */
+const DEMO_FILES = {
+  roster: '範例_人員基本資料表.xlsx',
+  docs: [
+    '範例公文1_資訊教育推廣.pdf',
+    '範例公文2_性別平等教育.pdf',
+    '範例公文3_學生競賽指導.pdf',
+  ],
+};
+
+async function fetchAsFile(name) {
+  const res = await fetch(encodeURI(name), { cache: 'no-store' });
+  if (!res.ok) throw new Error(`${name}（${res.status}）`);
+  return new File([await res.blob()], name);
+}
+
+/** 共用的載入流程：抓檔、餵進正常處理、失敗時提示改用手動下載 */
+async function runDemo(btn, names, handler, errBox) {
+  btn.disabled = true;
+  const original = btn.innerHTML;
+  btn.textContent = '載入中…';
+  try {
+    const files = [];
+    for (const n of names) files.push(await fetchAsFile(n));
+    await handler(files);
+  } catch (err) {
+    say(errBox, `範例載入失敗：${err.message}。可以改用下方連結手動下載後上傳。`, true);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
 async function loadRoster(files) {
   const f = files[0]; if (!f) return;
   try {
@@ -253,7 +288,7 @@ function normalizeOcrText(text) {
  * 絕對不要寫進這裡，這是公開的 repo。
  * 留空的話畫面上會同時出現網址和密碼兩個欄位，方便自架的人使用。
  */
-const MAC_OCR_SERVER = '';
+const MAC_OCR_SERVER = 'https://webhr-award-csv.zeabur.app';
 
 const MAC_OCR_KEY = 'webhr-award-mac-ocr';
 
@@ -1650,6 +1685,15 @@ window.addEventListener('DOMContentLoaded', () => {
     renderLifetime();
   });
 
+  $('#demoRoster').addEventListener('click', e =>
+    runDemo(e.currentTarget, [DEMO_FILES.roster], loadRoster, '#rosterMsg'));
+  $('#demoDocs').addEventListener('click', async e => {
+    // 公文解析需要名冊，沒載入的話先自動補上範例名冊
+    if (!state.roster.length) {
+      await runDemo(e.currentTarget, [DEMO_FILES.roster], loadRoster, '#rosterMsg');
+    }
+    await runDemo(e.currentTarget, DEMO_FILES.docs, loadDocs, '#docMsg');
+  });
   wireMemory();
   wireMacOcr();
   wireDrop('#rosterDrop', '.xls,.xlsx', loadRoster);

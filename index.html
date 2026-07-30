@@ -55,6 +55,9 @@
         <input type="file">
       </div>
       <div class="loaded" id="rosterMsg" hidden></div>
+      <button type="button" class="demo-link" id="demoRoster">
+        <span class="demo-ico" aria-hidden="true">試</span>使用範例名冊
+      </button>
     </div>
     <div class="upload-card required">
       <div class="upload-label"><span>必要</span> 第 2 步</div>
@@ -66,6 +69,21 @@
         <input type="file" multiple>
       </div>
       <div class="ocr-info"><b>掃描公文也可使用</b>　偵測不到文字時，會在瀏覽器內啟動繁體中文 OCR；首次辨識需下載模型，請稍候。</div>
+      <button type="button" class="demo-link" id="demoDocs">
+        <span class="demo-ico" aria-hidden="true">試</span>使用範例公文（3 份）
+      </button>
+      <div class="demo-box">
+        <b>第一次使用？</b>　點上面的「使用範例」直接載入試跑，內容全部虛構，不含真實個資。
+        <details class="demo-dl">
+          <summary>也可以下載範例檔自行修改</summary>
+          <div class="demo-links">
+            <a href="範例_人員基本資料表.xlsx" download>人員基本資料表</a>
+            <a href="範例公文1_資訊教育推廣.pdf" download>範例公文 1</a>
+            <a href="範例公文2_性別平等教育.pdf" download>範例公文 2</a>
+            <a href="範例公文3_學生競賽指導.pdf" download>範例公文 3</a>
+          </div>
+        </details>
+      </div>
       <div class="loaded" id="docMsg" hidden></div>
     </div>
   </div>
@@ -185,8 +203,8 @@
 <script src="pdf.min.js"></script>
   <script src="tesseract.min.js"></script>
   <script src="schools.js?v=1"></script>
-  <script src="core.js?v=19"></script>
+  <script src="core.js?v=22"></script>
   <script src="memory.js?v=1"></script>
-  <script src="ui.js?v=21"></script>
+  <script src="ui.js?v=25"></script>
 </body>
 </html>

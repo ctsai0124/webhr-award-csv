@@ -554,3 +554,41 @@ button:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .pb-fill.indeterminate { animation: none; width: 100%; opacity: .4; }
 }
+
+/* ---------- 範例檔下載 ---------- */
+.demo-box {
+  margin-top: 12px; padding: 11px 14px; font-size: 13px; line-height: 1.7;
+  background: #F6F8FA; border: 1px solid #DCE3EA; border-radius: 3px; color: var(--stone);
+}
+.demo-box b { color: var(--indigo); }
+.demo-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.demo-links a {
+  display: inline-block; padding: 4px 12px; font-size: 12.5px;
+  border: 1px solid var(--hair); border-radius: 2px; background: #fff;
+  color: var(--indigo); text-decoration: none;
+}
+.demo-links a:hover { border-color: var(--indigo); background: #EEF3F8; }
+.demo-links a:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+
+/* 範例入口：放在各自的上傳區底下，點了直接載入該項 */
+.demo-link {
+  display: inline-flex; align-items: center; gap: 7px; margin-top: 10px;
+  padding: 6px 14px; font-family: var(--sans); font-size: 13px;
+  border: 1px dashed #C8D4DF; border-radius: 2px;
+  background: #F6F8FA; color: var(--indigo); cursor: pointer;
+}
+.demo-link:hover { border-style: solid; border-color: var(--indigo); background: #EEF3F8; }
+.demo-link:disabled { opacity: .55; cursor: wait; }
+.demo-link:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.demo-ico {
+  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--indigo); color: #fff;
+  font-family: var(--serif); font-size: 11px; line-height: 18px; text-align: center;
+}
+.demo-dl { margin-top: 9px; }
+.demo-dl summary {
+  cursor: pointer; font-size: 12.5px; color: var(--indigo); list-style: none; width: fit-content;
+}
+.demo-dl summary::-webkit-details-marker { display: none; }
+.demo-dl summary::before { content: "▸ "; }
+.demo-dl[open] summary::before { content: "▾ "; }
