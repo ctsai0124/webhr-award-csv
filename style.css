@@ -169,6 +169,8 @@ h2 { color: var(--ink); font-size: clamp(24px, 3vw, 30px); line-height: 1.35; }
   width: 36px;
   height: 36px;
   place-items: center;
+  font: 600 12.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: .02em;
   color: rgba(255, 255, 255, .85);
   background: #1d5b4e;
   border: 1px solid rgba(255, 255, 255, .28);
@@ -378,13 +380,26 @@ h2 { color: var(--ink); font-size: clamp(24px, 3vw, 30px); line-height: 1.35; }
 
 .loaded,
 .warnbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   margin-top: 12px;
-  padding: 10px 13px;
+  padding: 11px 14px;
   color: var(--green-dark);
   background: var(--green-pale);
   border: 1px solid #cfe4dc;
   border-radius: 10px;
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  animation: fadein .35s both;
+}
+
+/* 成功狀態前面加個勾號，一眼看出「這一步完成了」 */
+.loaded:not(.err):not(.progress)::before {
+  content: "✓";
+  flex: none;
+  font: 600 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--green);
 }
 
 details {
@@ -1010,6 +1025,7 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
 /* ---------- 辨識進度 ---------- */
 .loaded.progress {
+  display: block;   /* 進度條是縱向的三塊，不套用 .loaded 的橫向 flex */
   background: #F6F8FA; border-color: #DCE3EA; color: var(--ink);
   padding: 14px 16px;
 }
@@ -1118,4 +1134,27 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
   .pb-fill.indeterminate { animation: none; width: 100%; opacity: .4; }
+}
+
+
+/* ---------- 進場動畫 ---------- */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fadein {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 卡片依序浮現。只做一次，不干擾後續操作 */
+.step { animation: rise .5s both; }
+.step:nth-of-type(2) { animation-delay: .06s; }
+.step:nth-of-type(3) { animation-delay: .12s; }
+
+/* 公文解析完逐份出現 */
+.doc { animation: rise .38s both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .step, .doc, .loaded, .warnbox { animation: none; }
 }
