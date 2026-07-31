@@ -1566,7 +1566,7 @@ function buildSkipRows() {
       類別: '二、本次完全未敘獎',
       姓名: p.name, 職稱: p.title, 單位: p.unit,
       公文主旨: '', 公文檔號: '', 解析狀態: '', 獎度: '',
-      備註: p.isPrincipal ? '校長（依規定由教育局統一辦理）' : '',
+      備註: p.isPrincipal ? '校長（依規定由上級機關統一辦理）' : '',
     });
   }
   return out;

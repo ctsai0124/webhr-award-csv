@@ -2,14 +2,14 @@
    敘獎 CSV 產製工具
    =========================================================== */
 
-const APP_VERSION = '1.26.0';
+const APP_VERSION = '1.26.1';
 const APP_DATE = '2026-07-27';
 
 
 /* -----------------------------------------------------------
    異體字正規化
    人事資料和公文常混用同一個字的不同寫法，肉眼幾乎分不出來，
-   對程式卻是兩個字元。不處理的話「陳佳姸」和「佳妍」會被判成錯字，
+   對程式卻是兩個字元。不處理的話「林佳蓉」和「佳妍」會被判成錯字，
    而畫面上兩個名字看起來完全一樣，使用者根本不知道差在哪。
    ----------------------------------------------------------- */
 const VARIANT_PAIRS = [
@@ -557,7 +557,7 @@ function detectDuty(block, pos, written = '') {
 
 /**
  * 取姓名前緊鄰的班級或職務標記。
- * 例如同一位教師分別列在「一忠導師李雅玲」與「四忠導師李雅玲」，
+ * 例如同一位教師分別列在「一忠導師鄭惠君」與「四忠導師鄭惠君」，
  * 兩筆都要保留，且事由需能分辨其負責範圍。
  */
 function detectAssignment(block, pos) {
@@ -617,12 +617,12 @@ function matchNames(block, roster) {
     for (const p of roster) {
       const n = p.name;
       // 完全相符
-      // 異體字（陳佳姸／陳佳妍）視為同一個名字，不能判成錯字
+      // 異體字（林佳蓉／林佳蓉）視為同一個名字，不能判成錯字
       const seg = block.slice(i, i + n.length);
       if (seg === n || (seg.length === n.length && normVariant(seg) === normVariant(n))) {
         push(p, i, seg, 'exact'); continue;
       }
-      // 同長度、差一字（抓錯字：江雨薇/江宇薇、陳玟純/陳玟蒓）
+      // 同長度、差一字（抓錯字：江雨薇/江宇薇、黃建弘/黃建宏）
       if (n.length >= 3) {
         const w = block.slice(i, i + n.length);
         if (w.length === n.length) {
@@ -637,7 +637,7 @@ function matchNames(block, roster) {
     }
   }
 
-  // 只有名沒有姓：「怡慈老師」→ 林怡慈
+  // 只有名沒有姓：「怡慈老師」→ 張美玲
   const TITLE = /(老師|主任|組長|護理師|幹事|執秘|秘書)/;
   for (const p of roster) {
     if (p.name.length < 3) continue;
@@ -682,7 +682,7 @@ function matchNames(block, roster) {
         if (/(?:人員|執秘|主任|組長|名單|[：:、，,])$/.test(before) ||
             /^(?:記功|嘉獎|[、，,])/.test(after)) {
           // 沒有姓氏定錨，兩個字還錯一個 —— 實際只吻合一個字，太弱。
-          // 名冊上查無此人的離職者（例如寫「怡如」但蔡怡如已離職），
+          // 名冊上查無此人的離職者（例如寫「怡如」但孫佩玲已離職），
           // 會被誤配成名冊上的「怡慈」，所以標為弱比對，一律人工確認。
           push(p, i, written, 'typo', true, true);
         }
@@ -698,7 +698,7 @@ function matchNames(block, roster) {
 /* -----------------------------------------------------------
    6d. 職稱沿革（取自批核軌跡）
    人員基本資料表只有現職，查不到「113學年度當時的教導主任是誰」。
-   但公文後半的批核軌跡會寫「…國民小學教導主任 侯進昇(2025.09.23)」，
+   但公文後半的批核軌跡會寫「…國民小學教導主任 王大明(2025.09.23)」，
    把多份公文的簽核紀錄彙整起來，就看得出職務什麼時候交接。
    ----------------------------------------------------------- */
 
@@ -925,7 +925,7 @@ function matchAll(block, roster, history = null, era = null, submitter = null) {
   const stage2 = [...found, ...byRole];
 
   // 職稱旁邊如果已經寫了姓名，那個職稱是在描述那個人，不是另一個受獎人。
-  // 例：「時任資訊執秘為:吳孟謙老師」—— 資訊執秘講的就是吳孟謙，
+  // 例：「時任資訊執秘為:李小華老師」—— 資訊執秘講的就是李小華，
   // 不該再把現任的資訊執秘也算進來。
   const named = (h) => stage2.some(d => {
     const gapAfter = d.pos - (h.pos + h.written.length);
@@ -1044,9 +1044,9 @@ function findAwards(block) {
     const lead = block.slice(Math.max(0, m.index - 8), m.index);
     const shared = /各|均|每人|分別|同敘/.test(lead);
 
-    // 「嘉獎2次1人：蕭宗仁主任」— 獎度寫在前面當標題，後面才接名單。
+    // 「嘉獎2次1人：蔡明德主任」— 獎度寫在前面當標題，後面才接名單。
     // 分隔號限定冒號和破折號，不能收「、」「，」，
-    // 否則「…敘嘉獎2次、林怡慈老師…」會被誤判成標題，把下一個人吃掉。
+    // 否則「…敘嘉獎2次、張美玲老師…」會被誤判成標題，把下一個人吃掉。
     const afterPos = m.index + m[0].length;
     const mh = block.slice(afterPos, afterPos + 10).match(/^\s*(?:\d+\s*人)?\s*[：:\-－—]\s*/);
 
@@ -1139,7 +1139,7 @@ function findApprovalAwards(text, roster) {
  *
  * 一般公文多是「姓名…獎度」，但表格式擬辦常是「獎度／職稱／姓名」。
  * 先比較整段中獎度落在姓名前後的命中數，再決定一般認領方向，
- * 可避免學生健檢表格把郭喜淑的嘉獎二次錯配成下一列的嘉獎一次。
+ * 可避免學生健檢表格把劉淑芬的嘉獎二次錯配成下一列的嘉獎一次。
  */
 function segmentAt(block, pos) {
   // 句段邊界：句號、分號、換行，以及「1.」「一、」這種條列編號
@@ -1178,8 +1178,8 @@ function pairNameAward(block, hits, awards, opts = {}) {
     if (!a.shared) continue;
     const [s0, s1] = segmentAt(block, a.pos);
     // 同一句前面若已有另一個獎度，共用範圍從那個獎度之後才開始。
-    // 例：「蘇宇祥嘉獎2次，教導主任、總務主任各嘉獎1次」，
-    // 後面的「各嘉獎1次」不能回頭覆蓋蘇宇祥。
+    // 例：「蔡明德嘉獎2次，教導主任、總務主任各嘉獎1次」，
+    // 後面的「各嘉獎1次」不能回頭覆蓋蔡明德。
     const previous = awards
       .filter(other => other !== a && other.pos >= s0 && other.pos < a.pos)
       .sort((x, y) => y.pos - x.pos)[0];
@@ -1329,7 +1329,7 @@ const SUBJECT_NOISE = [
 /**
  * 把公文主旨清成可以當事由的核心描述。
  *
- * 公文主旨是「教育局對學校講話」的語氣，事由是「描述這個人做了什麼」，
+ * 公文主旨是「上級機關對學校講話」的語氣，事由是「描述這個人做了什麼」，
  * 兩者視角不同。檢送、請逕依權責辦理、詳如說明這些是行文用語，
  * 不是在描述工作內容，全部要砍掉。
  */
@@ -1534,7 +1534,7 @@ function detectScope(block, pos, written = '') {
   const near = block.slice(
     Math.max(s0, pos - 24),
     Math.min(s1, pos + written.length + 24));
-  // 依教育局歷年敘獎令（636 筆）歸納出的區別詞類型。
+  // 依上級機關歷年敘獎令（636 筆）歸納出的區別詞類型。
   // 同一案件多筆時，實務上用的是工作階段或範圍，例如
   //   「…海外友好城市兒童聯合畫展暨頒獎典禮」(畫作徵選階段)
   //   「…」(畫作展覽階段) / (頒獎典禮階段)
@@ -1569,7 +1569,7 @@ function detectScope(block, pos, written = '') {
   const byColon = lead.match(/([\u4e00-\u9fa5][^：:；;。]{3,24})[：:]\s*[^：:]*$/);
   if (byColon) return trimScope(byColon[1]);
 
-  // 描述也可能寫在姓名後面：「秦桂屏辦理線上課程建置嘉獎1次」
+  // 描述也可能寫在姓名後面：「陳志豪辦理線上課程建置嘉獎1次」
   let after = block.slice(pos + written.length, s1);
   const am = after.match(AWARD);
   if (am) after = after.slice(0, am.index);
