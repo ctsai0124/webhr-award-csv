@@ -616,45 +616,14 @@ input[type="checkbox"] {
      --hair   → --line       框線
    =========================================================== */
 
-/* ---------- 頁首 ---------- */
-header {
-  padding: 34px 0 24px;
-}
+/* 頁首與流程列的樣式在檔案前段（深綠底那組），這裡不重複定義。
+   舊版是淺色底的寫法，留著會覆蓋前面的設定，把金色的目前步驟蓋成深綠。 */
 
-header h1 {
-  font-family: "Noto Serif TC", serif;
-  font-size: 32px;
-  font-weight: 600;
-  letter-spacing: .06em;
-  margin: 3px 0 0;
-}
-
-.flow li:first-child { border-left: 0; }
-
-.flow li span {
-  grid-row: 1 / 3; align-self: center; width: 28px; height: 28px;
-  display: grid; place-items: center; border-radius: 50%; background: #EEF0F2;
-  color: var(--ink-soft); font: 600 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-.flow li.active span { background: var(--green); color: #fff; }
-
-/* 流程列是深綠底，文字一律用白色系。
-   這幾條是舊版淺色底留下的，會覆蓋前面的設定，改成深底適用的值。 */
-.flow li.done span { background: rgba(255, 255, 255, .22); color: #fff; }
+/* 已完成的步驟：比未完成亮，但不搶走目前步驟的金色 */
+.flow li.done > span { background: rgba(255, 255, 255, .22); color: #fff; }
 .flow li.done b { color: rgba(255, 255, 255, .92); }
-.flow b { font-size: 13.5px; line-height: 1.35; }
-.flow small { font-size: 11.5px; line-height: 1.4; margin-top: 2px; }
 
 /* ---------- 步驟區塊 ---------- */
-.step {
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 28px 30px;
-  margin-bottom: 20px;
-  box-shadow: 0 6px 24px rgba(28, 49, 67, .045);
-}
 
 .step-head h2, .export-title h2 {
   font-family: "Noto Serif TC", serif;
@@ -669,15 +638,6 @@ header h1 {
 .step[hidden] { display: none; }
 
 /* ---------- 檔案投放區 ---------- */
-.drop {
-  border: 1.5px dashed #B9C5CE;
-  border-radius: 8px;
-  padding: 22px 20px 20px;
-  text-align: center;
-  cursor: pointer;
-  background: #FCFCFB;
-  transition: border-color .15s, background .15s;
-}
 
 .drop span { color: var(--ink-soft); font-size: 12.5px; }
 
@@ -693,9 +653,6 @@ header h1 {
 
 /* 兩欄的內容量不同（左邊多一塊下載路徑說明），用 flex 讓上傳框自己撐開，
    標籤與範例按鈕才會左右對齊。 */
-.upload-card {
-  min-width: 0; display: flex; flex-direction: column; height: 100%;
-}
 
 .upload-card .drop { flex: none; }
 
@@ -713,17 +670,6 @@ header h1 {
 .source-guide p strong { color: var(--danger); margin-right: 3px; }
 
 /* ---------- 已載入摘要 ---------- */
-.loaded {
-  margin-top: 12px;
-  font-size: 13.5px;
-  padding: 10px 14px;
-  border-radius: 6px;
-  background: var(--green-pale);
-  color: var(--green);
-  border: 1px solid var(--line);
-  white-space: pre-line;
-  line-height: 1.65;
-}
 
 .loaded.err { background: var(--gold-pale); color: var(--danger); border-color: #F0D3CF; }
 
@@ -881,7 +827,6 @@ details.more[open] summary::before { content: "▾ "; }
 .more-grid .num { width: 46px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; padding: 3px 5px; }
 
 /* ---------- 動作列 ---------- */
-.export-title { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
 
 #step4 { position: sticky; bottom: 12px; z-index: 5; border-color: #CAD5DD; box-shadow: 0 12px 38px rgba(28, 49, 67, .16); }
 
@@ -905,10 +850,6 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .summary b { color: var(--ink); font-weight: 600; }
 
 /* ---------- 職稱沿革 ---------- */
-.hist {
-  margin-top: 14px; padding: 12px 15px; font-size: 13px;
-  background: #F6F8FA; border: 1px solid #DCE3EA; border-radius: 2px;
-}
 
 .hist-head { color: var(--green); font-size: 12.5px; margin-bottom: 7px; }
 
@@ -1003,9 +944,6 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 }
 
 /* ---------- 本次獎度統計 ---------- */
-.tally {
-  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px;
-}
 
 .tally-item {
   display: flex; align-items: baseline; gap: 7px;
@@ -1017,11 +955,6 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .tally-num { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 15px; font-weight: 600; color: var(--ink); }
 
 /* ---------- 版本與累計 ---------- */
-.foot-meta {
-  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
-  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; color: var(--ink-soft);
-}
 
 .lifetime { color: var(--green); }
 
@@ -1045,9 +978,6 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .doc-seal:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
 /* ---------- Mac OCR 設定 ---------- */
-.field-row {
-  display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px;
-}
 
 .field-row label {
   display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-soft);
@@ -1120,22 +1050,12 @@ button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 }
 
 /* ---------- 範例檔下載 ---------- */
-.demo-box {
-  margin-top: 12px; padding: 11px 14px; font-size: 13px; line-height: 1.7;
-  background: #F6F8FA; border: 1px solid #DCE3EA; border-radius: 3px; color: var(--ink-soft);
-}
 
 .demo-links a:hover { border-color: var(--green); background: #EEF3F8; }
 
 .demo-links a:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
 /* 範例入口：放在各自的上傳區底下，點了直接載入該項 */
-.demo-link {
-  display: inline-flex; align-items: center; gap: 7px; margin-top: 10px;
-  padding: 6px 14px; font-family: inherit; font-size: 13px;
-  border: 1px dashed #C8D4DF; border-radius: 2px;
-  background: #F6F8FA; color: var(--green); cursor: pointer;
-}
 
 .demo-link:disabled { opacity: .55; cursor: wait; }
 
